@@ -26,6 +26,7 @@
 #include <OgreTextureManager.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -68,6 +69,11 @@ void TurnSignalsDisplay::updateHazardLightsData(
   }
 }
 
+void TurnSignalsDisplay::setBlinkingMode(std::string_view mode)
+{
+  blinking_mode_ = mode;
+}
+
 void TurnSignalsDisplay::drawArrows(
   QPainter & painter, const QRectF & backgroundRect, const QColor & color)
 {
@@ -85,10 +91,14 @@ void TurnSignalsDisplay::drawArrows(
     (current_turn_signal_ == autoware_vehicle_msgs::msg::TurnIndicatorsReport::ENABLE_RIGHT ||
      current_hazard_lights_ == autoware_vehicle_msgs::msg::HazardLightsReport::ENABLE);
 
-  if (leftActive) {
+  auto now = std::chrono::steady_clock::now().time_since_epoch();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+
+  bool blink_off = blinking_mode_ == "Blinking" && (elapsed / 333) % 2 == 0;
+  if (leftActive && !blink_off) {
     scaledLeftArrow = coloredImage(scaledLeftArrow, color);
   }
-  if (rightActive) {
+  if (rightActive && !blink_off) {
     scaledRightArrow = coloredImage(scaledRightArrow, color);
   }
 
