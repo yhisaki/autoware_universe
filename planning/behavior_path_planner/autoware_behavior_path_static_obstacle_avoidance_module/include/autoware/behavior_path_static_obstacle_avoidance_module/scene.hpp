@@ -27,6 +27,7 @@
 #include <rclcpp/node.hpp>
 #include <rclcpp/time.hpp>
 
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <set>
@@ -50,6 +51,14 @@ public:
     std::unordered_map<std::string, std::shared_ptr<ObjectsOfInterestMarkerInterface>> &
       objects_of_interest_marker_interface_ptr_map,
     const std::shared_ptr<PlanningFactorInterface> & planning_factor_interface);
+
+  ~StaticObstacleAvoidanceModule() override
+  {
+    std::cout << "--------------------------------" << std::endl;
+    std::cout << "~StaticObstacleAvoidanceModule" << std::endl;
+    std::cout << "target_objects size: " << avoid_data_.target_objects.size() << std::endl;
+    std::cout << "--------------------------------" << std::endl;
+  }
 
   CandidateOutput planCandidate() const override;
   BehaviorModuleOutput plan() override;
@@ -484,6 +493,8 @@ private:
 
   // TODO(Satoshi OTA) remove this variable.
   mutable ObjectDataArray stopped_objects_;
+
+  mutable std::unordered_map<std::string, rclcpp::Time> unknown_type_object_first_seen_time_map_;
 
   mutable size_t safe_count_{0};
 

@@ -391,6 +391,10 @@ struct ObjectData  // avoidance target
   // distance factor for perception noise (0.0~1.0)
   double distance_factor{0.0};
 
+  // Objects that have not been classified as UNKNOWN for a certain period of time may not be
+  // UNKNOWN.
+  bool is_classification_unstable{false};
+
   // count up when object disappeared. Removed when it exceeds threshold.
   rclcpp::Time last_seen{rclcpp::Clock(RCL_ROS_TIME).now()};
   double lost_time{0.0};

@@ -23,6 +23,7 @@
 
 #include <Eigen/Dense>
 #include <autoware_lanelet2_extension/utility/message_conversion.hpp>
+#include <autoware_utils_uuid/uuid_helper.hpp>
 
 #include <boost/geometry/algorithms/buffer.hpp>
 #include <boost/geometry/algorithms/convex_hull.hpp>
@@ -33,10 +34,12 @@
 #include <lanelet2_routing/RoutingGraphContainer.h>
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1678,6 +1681,36 @@ void fillObjectMovingTime(
   }
 }
 
+void updateClassificationUnstableObjects(
+  ObjectData & object_data,
+  std::unordered_map<std::string, rclcpp::Time> & unknown_type_object_first_seen_time_map)
+{
+  // std::cout << "map size: " << unknown_type_object_first_seen_time_map.size() << std::endl;
+  if (filtering_utils::isUnknownTypeObject(object_data)) {
+    auto now = rclcpp::Clock(RCL_ROS_TIME).now();
+    std::string object_id = to_hex_string(object_data.object.object_id);
+    if (
+      unknown_type_object_first_seen_time_map.find(object_id) ==
+      unknown_type_object_first_seen_time_map.end()) {
+      unknown_type_object_first_seen_time_map[object_id] = now;
+    }
+    auto elapsed_time = (now - unknown_type_object_first_seen_time_map[object_id]).seconds();
+    if (elapsed_time < 2.0) {
+      // If the object is classified as unknown type for more than 3 seconds, It is truely unknown
+      // type.
+      object_data.is_classification_unstable = true;
+      // std::cout << "object_id: " << object_id
+      //           << " is classification unstable, elapsed_time: " << elapsed_time << std::endl;
+    } else {
+      object_data.is_classification_unstable = false;
+      // std::cout << "object_id: " << object_id
+      //           << " is truly unknown type, elapsed_time: " << elapsed_time << std::endl;
+    }
+    // Else, the object is classified as unknown type for less than 3 seconds, it may not be
+    // unknown type.
+  }
+}
+
 void fillAvoidanceNecessity(
   ObjectData & object_data, const ObjectDataArray & registered_objects, const double vehicle_width,
   const std::shared_ptr<AvoidanceParameters> & parameters)
@@ -1782,7 +1815,9 @@ void compensateLostTargetObjects(
     auto object_copy = stored_object;
     utils::static_obstacle_avoidance::fillLongitudinalAndLengthByClosestEnvelopeFootprint(
       data.reference_path_rough, ego_pos, object_copy);
-
+    std::cout << "compensate object_id: " << to_hex_string(object_copy.object.object_id)
+              << " is_classification_unstable: " << object_copy.is_classification_unstable
+              << std::endl;
     data.target_objects.push_back(object_copy);
   }
 }
@@ -1825,6 +1860,10 @@ void updateStoredObjects(
       } else {
         o.last_seen = now;
         o.lost_time = 0.0;
+      }
+      if (o.lost_time > parameters->object_last_seen_threshold) {
+        std::cout << "erase object_id: " << to_hex_string(o.object.object_id)
+                  << " lost_time: " << o.lost_time << std::endl;
       }
       return o.lost_time > parameters->object_last_seen_threshold;
     });
@@ -1974,17 +2013,9 @@ void filterTargetObjects(
       utils::static_obstacle_avoidance::calcEnvelopeOverhangDistance(o, data.reference_path);
     o.to_road_shoulder_distance = filtering_utils::getRoadShoulderDistance(o, data, planner_data);
 
-    if (filtering_utils::isUnknownTypeObject(o)) {
-      // TARGET: UNKNOWN
-
-      // TODO(Satoshi Ota) parametrize stop time threshold if need.
-      constexpr double STOP_TIME_THRESHOLD = 3.0;  // [s]
-      if (o.stop_time < STOP_TIME_THRESHOLD) {
-        o.info = ObjectInfo::UNSTABLE_OBJECT;
-        data.other_objects.push_back(o);
-        continue;
-      }
-      o.avoid_margin = filtering_utils::getAvoidMargin(o, planner_data, parameters);
+    if (o.is_classification_unstable) {
+      o.info = ObjectInfo::UNSTABLE_OBJECT;
+      data.other_objects.push_back(o);
     } else if (filtering_utils::isVehicleTypeObject(o)) {
       // TARGET: CAR, TRUCK, BUS, TRAILER, MOTORCYCLE
 
