@@ -1689,11 +1689,7 @@ void updateClassificationUnstableObjects(
   if (filtering_utils::isUnknownTypeObject(object_data)) {
     auto now = rclcpp::Clock(RCL_ROS_TIME).now();
     std::string object_id = to_hex_string(object_data.object.object_id);
-    if (
-      unknown_type_object_first_seen_time_map.find(object_id) ==
-      unknown_type_object_first_seen_time_map.end()) {
-      unknown_type_object_first_seen_time_map[object_id] = now;
-    }
+    unknown_type_object_first_seen_time_map.try_emplace(object_id, now);
     auto elapsed_time = (now - unknown_type_object_first_seen_time_map[object_id]).seconds();
 
     object_data.is_classification_unstable = elapsed_time < unstable_classification_time;
