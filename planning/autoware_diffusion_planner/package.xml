@@ -14,9 +14,11 @@
   <author email="daniel.sanchez@tier4.jp">Daniel Sanchez</author>
 
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <build_depend>zlib</build_depend>
 
   <depend>autoware_cuda_dependency_meta</depend>
   <depend>autoware_cuda_utils</depend>
+  <depend>autoware_internal_debug_msgs</depend>
   <depend>autoware_internal_planning_msgs</depend>
   <depend>autoware_lanelet2_extension</depend>
   <depend>autoware_lanelet2_utils</depend>
@@ -44,15 +46,21 @@
   <depend>rclcpp_components</depend>
   <depend>rosbag2_cpp</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>libexpected-dev</depend>
   <depend>visualization_msgs</depend>
 
   <exec_depend>autoware_tensorrt_plugins</exec_depend>
   <exec_depend>rosbag2_storage_mcap</exec_depend>
+  <exec_depend>zlib</exec_depend>
 
   <test_depend>ament_cmake_ros</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>autoware_lint_common</test_depend>
+  <test_depend>autoware_pyplot</test_depend>
   <test_depend>autoware_test_utils</test_depend>
+  <test_depend>pybind11_vendor</test_depend>
+  <test_depend>python_cmake_module</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

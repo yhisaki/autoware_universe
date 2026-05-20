@@ -6,6 +6,7 @@ autoware_package()
 
 # Options
 option(CUDA_VERBOSE "Verbose output of CUDA modules" OFF)
+option(BUILD_EXAMPLES "Build examples" OFF)
 
 # Find CUDA
 option(CUDA_AVAIL "CUDA available" OFF)
@@ -64,7 +65,14 @@ if(TRT_AVAIL AND CUDA_AVAIL)
     src/utils/marker_utils.cpp
     src/utils/planning_factor_utils.cpp
     src/postprocessing/turn_indicator_manager.cpp
-    src/inference/tensorrt_inference.cpp
+    src/inference/solver/dpm_solver.cpp
+    src/inference/guidance/guidance.cpp
+    src/inference/guidance/start_guidance.cpp
+    src/inference/guidance/stop_guidance.cpp
+    src/inference/guidance/utils.cpp
+    src/inference/multi_step_inference.cpp
+    src/inference/single_step_inference.cpp
+    src/inference/utils.cpp
   )
 
   target_include_directories(autoware_diffusion_planner_component PUBLIC
@@ -125,6 +133,38 @@ if(TRT_AVAIL AND CUDA_AVAIL)
       ${CUDA_LIBRARIES}
       ${CUBLAS_LIBRARIES}
       ${CUDNN_LIBRARY}
+    )
+  endif()
+
+  if(BUILD_EXAMPLES)
+    find_package(autoware_pyplot REQUIRED)
+    find_package(python_cmake_module REQUIRED)
+    find_package(
+      Python3
+      COMPONENTS Interpreter Development
+      REQUIRED)
+    find_package(pybind11_vendor REQUIRED)
+    find_package(pybind11 REQUIRED)
+    find_package(ZLIB REQUIRED)
+
+    ament_auto_add_executable(example_diffusion_planner_inference
+      examples/example_diffusion_planner_inference.cpp
+      examples/cnpy/cnpy.cpp
+    )
+    target_include_directories(example_diffusion_planner_inference PRIVATE
+      examples/cnpy
+      ${autoware_pyplot_INCLUDE_DIRS}
+    )
+    target_compile_options(example_diffusion_planner_inference PRIVATE
+      -Wno-error=unused-variable
+      -Wno-error=unused-but-set-variable
+    )
+    target_link_libraries(example_diffusion_planner_inference
+      autoware_diffusion_planner_component
+      ${autoware_pyplot_LIBRARIES}
+      Python3::Python
+      pybind11::embed
+      ZLIB::ZLIB
     )
   endif()
 endif()
