@@ -17,6 +17,8 @@
 
 #include "autoware/diffusion_planner/inference/guidance/guidance.hpp"
 
+#include <Eigen/Core>
+
 #include <vector>
 
 namespace autoware::diffusion_planner
@@ -25,10 +27,8 @@ namespace autoware::diffusion_planner
 struct CenterlineGuidanceConfig
 {
   float start_time_s{2.0f};
-  float x_mean{0.0f};
-  float y_mean{0.0f};
-  float x_std{1.0f};
-  float y_std{1.0f};
+  Eigen::Vector4f state_mean{Eigen::Vector4f::Zero()};
+  Eigen::Vector4f state_std{Eigen::Vector4f::Ones()};
 };
 
 class CenterlineGuidance final : public Guidance

@@ -45,11 +45,9 @@ GuidanceResult StartGuidance::compute_delta(
     return result;
   }
 
-  const float x_std = config_.x_std;
-  const float y_std = config_.y_std;
-  const std::vector<std::vector<Eigen::Vector2d>> trajectories =
+  const std::vector<std::vector<Eigen::Vector4f>> trajectories =
     extract_denormalized_trajectories_from_model_output(
-      model_output, config_.x_mean, config_.y_mean, x_std, y_std);
+      model_output, config_.state_mean, config_.state_std);
   if (trajectories.empty()) {
     return result;
   }
@@ -60,24 +58,22 @@ GuidanceResult StartGuidance::compute_delta(
     return result;
   }
 
-  std::vector<std::vector<Eigen::Vector2d>> guided_trajectories = trajectories;
+  std::vector<std::vector<Eigen::Vector4f>> guided_trajectories = trajectories;
   result.triggered.assign(trajectories.size(), false);
   bool has_delta = false;
 
   for (int64_t b = 0; b < static_cast<int64_t>(trajectories.size()); ++b) {
     const auto & trajectory = trajectories[b];
 
-    const double terminal_dx = trajectory.back().x() - trajectory.front().x();
-    const double terminal_dy = trajectory.back().y() - trajectory.front().y();
-    const double terminal_distance = std::hypot(terminal_dx, terminal_dy);
+    const float terminal_dx = trajectory.back().x() - trajectory.front().x();
+    const float terminal_dy = trajectory.back().y() - trajectory.front().y();
+    const float terminal_distance = std::hypot(terminal_dx, terminal_dy);
     if (terminal_distance >= reference_distance) {
       continue;
     }
 
     auto & guided_trajectory = guided_trajectories[b];
-    const double scale = std::min(
-      static_cast<double>(reference_distance) / (terminal_distance + 1e-5),
-      static_cast<double>(max_scale));
+    const float scale = std::min(reference_distance / (terminal_distance + 1e-5f), max_scale);
 
     std::cout << "time_step " << context.timestep << " scale = " << scale << std::endl;
 
@@ -96,8 +92,8 @@ GuidanceResult StartGuidance::compute_delta(
     return result;
   }
 
-  result.delta =
-    create_delta_from_denormalized_trajectories(trajectories, guided_trajectories, x_std, y_std);
+  result.delta = create_delta_from_denormalized_trajectories(
+    trajectories, guided_trajectories, config_.state_std);
   return result;
 }
 

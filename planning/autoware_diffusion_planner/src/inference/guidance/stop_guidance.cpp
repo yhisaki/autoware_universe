@@ -55,28 +55,26 @@ GuidanceResult StopGuidance::compute_delta(
   }
 
   const float stop_acceleration = config_.stop_acceleration_mps2;
-  const float x_std = config_.x_std;
-  const float y_std = config_.y_std;
-  const std::vector<std::vector<Eigen::Vector2d>> trajectories =
+  const std::vector<std::vector<Eigen::Vector4f>> trajectories =
     extract_denormalized_trajectories_from_model_output(
-      model_output, config_.x_mean, config_.y_mean, x_std, y_std);
+      model_output, config_.state_mean, config_.state_std);
   if (trajectories.empty()) {
     return result;
   }
 
-  const double reference_distance = static_cast<double>(current_speed_mps_ * current_speed_mps_) /
-                                    (2.0 * static_cast<double>(stop_acceleration));
+  const float reference_distance =
+    current_speed_mps_ * current_speed_mps_ / (2.0f * stop_acceleration);
 
-  std::vector<std::vector<Eigen::Vector2d>> guided_trajectories = trajectories;
+  std::vector<std::vector<Eigen::Vector4f>> guided_trajectories = trajectories;
   result.triggered.assign(trajectories.size(), false);
   bool has_delta = false;
 
   for (int64_t b = 0; b < static_cast<int64_t>(trajectories.size()); ++b) {
     const auto & trajectory = trajectories[b];
 
-    const double terminal_dx = trajectory.back().x() - trajectory.front().x();
-    const double terminal_dy = trajectory.back().y() - trajectory.front().y();
-    const double terminal_distance = std::hypot(terminal_dx, terminal_dy);
+    const float terminal_dx = trajectory.back().x() - trajectory.front().x();
+    const float terminal_dy = trajectory.back().y() - trajectory.front().y();
+    const float terminal_distance = std::hypot(terminal_dx, terminal_dy);
     if (
       !std::isfinite(reference_distance) || !std::isfinite(terminal_distance) ||
       terminal_distance <= 0.0 || terminal_distance <= reference_distance) {
@@ -84,7 +82,7 @@ GuidanceResult StopGuidance::compute_delta(
     }
 
     auto & guided_trajectory = guided_trajectories[b];
-    const double scale = reference_distance / terminal_distance;
+    const float scale = reference_distance / terminal_distance;
 
     for (int64_t t = 1; t <= OUTPUT_T; ++t) {
       guided_trajectory[t].x() =
@@ -101,8 +99,8 @@ GuidanceResult StopGuidance::compute_delta(
     return result;
   }
 
-  result.delta =
-    create_delta_from_denormalized_trajectories(trajectories, guided_trajectories, x_std, y_std);
+  result.delta = create_delta_from_denormalized_trajectories(
+    trajectories, guided_trajectories, config_.state_std);
   return result;
 }
 

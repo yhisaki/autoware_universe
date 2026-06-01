@@ -29,12 +29,14 @@ constexpr int64_t k_ego_agent_index = 0;
 size_t trajectory_index(
   const int64_t batch, const int64_t agent, const int64_t t, const int64_t dim);
 
-std::vector<std::vector<Eigen::Vector2d>> extract_denormalized_trajectories_from_model_output(
-  const std::vector<float> & model_output, float x_mean, float y_mean, float x_std, float y_std);
+std::vector<std::vector<Eigen::Vector4f>> extract_denormalized_trajectories_from_model_output(
+  const std::vector<float> & model_output, const Eigen::Vector4f & state_mean,
+  const Eigen::Vector4f & state_std);
 
 std::vector<float> create_delta_from_denormalized_trajectories(
-  const std::vector<std::vector<Eigen::Vector2d>> & trajectories,
-  const std::vector<std::vector<Eigen::Vector2d>> & guided_trajectories, float x_std, float y_std);
+  const std::vector<std::vector<Eigen::Vector4f>> & trajectories,
+  const std::vector<std::vector<Eigen::Vector4f>> & guided_trajectories,
+  const Eigen::Vector4f & state_std);
 
 }  // namespace autoware::diffusion_planner
 

@@ -38,7 +38,7 @@ namespace
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
 
-using BoostPoint = bg::model::point<double, 2, bg::cs::cartesian>;
+using BoostPoint = bg::model::point<float, 2, bg::cs::cartesian>;
 using BoostSegment = bg::model::segment<BoostPoint>;
 using IndexedSegment = std::pair<BoostSegment, size_t>;
 
@@ -59,7 +59,7 @@ bool is_valid_route_point(
   return false;
 }
 
-std::vector<Eigen::Vector2d> extract_centerline_points(const std::vector<float> & route_lanes)
+std::vector<Eigen::Vector2f> extract_centerline_points(const std::vector<float> & route_lanes)
 {
   const size_t single_batch_size =
     static_cast<size_t>(NUM_SEGMENTS_IN_ROUTE) * POINTS_PER_SEGMENT * SEGMENT_POINT_DIM;
@@ -67,7 +67,7 @@ std::vector<Eigen::Vector2d> extract_centerline_points(const std::vector<float> 
     return {};
   }
 
-  std::vector<Eigen::Vector2d> points;
+  std::vector<Eigen::Vector2f> points;
   points.reserve(static_cast<size_t>(NUM_SEGMENTS_IN_ROUTE) * POINTS_PER_SEGMENT);
   for (int64_t segment = 0; segment < NUM_SEGMENTS_IN_ROUTE; ++segment) {
     for (int64_t point = 0; point < POINTS_PER_SEGMENT; ++point) {
@@ -82,26 +82,26 @@ std::vector<Eigen::Vector2d> extract_centerline_points(const std::vector<float> 
   return points;
 }
 
-Eigen::Vector2d project_to_segment(
-  const Eigen::Vector2d & point, const Eigen::Vector2d & segment_start,
-  const Eigen::Vector2d & segment_end)
+Eigen::Vector2f project_to_segment(
+  const Eigen::Vector2f & point, const Eigen::Vector2f & segment_start,
+  const Eigen::Vector2f & segment_end)
 {
-  const Eigen::Vector2d segment = segment_end - segment_start;
-  const double squared_length = segment.squaredNorm();
-  if (squared_length <= std::numeric_limits<double>::epsilon()) {
+  const Eigen::Vector2f segment = segment_end - segment_start;
+  const float squared_length = segment.squaredNorm();
+  if (squared_length <= std::numeric_limits<float>::epsilon()) {
     return segment_start;
   }
 
-  const double ratio = std::clamp((point - segment_start).dot(segment) / squared_length, 0.0, 1.0);
+  const float ratio = std::clamp((point - segment_start).dot(segment) / squared_length, 0.0f, 1.0f);
   return segment_start + ratio * segment;
 }
 
-std::vector<Eigen::Vector2d> snap_trajectory_to_centerline(
-  const std::vector<Eigen::Vector2d> & trajectory,
-  const std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> & centerline_segments,
+std::vector<Eigen::Vector4f> snap_trajectory_to_centerline(
+  const std::vector<Eigen::Vector4f> & trajectory,
+  const std::vector<std::pair<Eigen::Vector2f, Eigen::Vector2f>> & centerline_segments,
   const bgi::rtree<IndexedSegment, bgi::quadratic<16>> & rtree, const int64_t start_step)
 {
-  std::vector<Eigen::Vector2d> guided_trajectory = trajectory;
+  std::vector<Eigen::Vector4f> guided_trajectory = trajectory;
   std::vector<IndexedSegment> nearest_segments;
   nearest_segments.reserve(1);
 
@@ -114,7 +114,10 @@ std::vector<Eigen::Vector2d> snap_trajectory_to_centerline(
     }
     const auto segment_index = nearest_segments.front().second;
     const auto & [segment_start, segment_end] = centerline_segments[segment_index];
-    guided_trajectory[t] = project_to_segment(trajectory[t], segment_start, segment_end);
+    const Eigen::Vector2f point = trajectory[t].head<2>();
+    const Eigen::Vector2f projected_point = project_to_segment(point, segment_start, segment_end);
+    guided_trajectory[t].x() = projected_point.x();
+    guided_trajectory[t].y() = projected_point.y();
   }
 
   return guided_trajectory;
@@ -154,14 +157,14 @@ GuidanceResult CenterlineGuidance::compute_delta(
     return result;
   }
 
-  std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> centerline_segments;
+  std::vector<std::pair<Eigen::Vector2f, Eigen::Vector2f>> centerline_segments;
   centerline_segments.reserve(centerline_points.size() - 1);
   std::vector<IndexedSegment> indexed_segments;
   indexed_segments.reserve(centerline_points.size() - 1);
   for (size_t i = 0; i + 1 < centerline_points.size(); ++i) {
     if (
       (centerline_points[i + 1] - centerline_points[i]).squaredNorm() <=
-      std::numeric_limits<double>::epsilon()) {
+      std::numeric_limits<float>::epsilon()) {
       continue;
     }
 
@@ -178,11 +181,9 @@ GuidanceResult CenterlineGuidance::compute_delta(
   }
   const bgi::rtree<IndexedSegment, bgi::quadratic<16>> rtree(indexed_segments);
 
-  const float x_std = config_.x_std;
-  const float y_std = config_.y_std;
-  const std::vector<std::vector<Eigen::Vector2d>> trajectories =
+  const std::vector<std::vector<Eigen::Vector4f>> trajectories =
     extract_denormalized_trajectories_from_model_output(
-      model_output, config_.x_mean, config_.y_mean, x_std, y_std);
+      model_output, config_.state_mean, config_.state_std);
   if (trajectories.empty()) {
     return result;
   }
@@ -192,7 +193,7 @@ GuidanceResult CenterlineGuidance::compute_delta(
   if (start_step > OUTPUT_T) {
     return result;
   }
-  std::vector<std::vector<Eigen::Vector2d>> guided_trajectories;
+  std::vector<std::vector<Eigen::Vector4f>> guided_trajectories;
   guided_trajectories.reserve(trajectories.size());
   result.triggered.assign(trajectories.size(), false);
 
@@ -202,8 +203,8 @@ GuidanceResult CenterlineGuidance::compute_delta(
     result.triggered[guided_trajectories.size() - 1] = true;
   }
 
-  result.delta =
-    create_delta_from_denormalized_trajectories(trajectories, guided_trajectories, x_std, y_std);
+  result.delta = create_delta_from_denormalized_trajectories(
+    trajectories, guided_trajectories, config_.state_std);
   return result;
 }
 

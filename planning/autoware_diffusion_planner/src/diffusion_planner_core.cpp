@@ -95,30 +95,48 @@ void DiffusionPlannerCore::load_model()
   start_guidance_config.reference_distance_m =
     static_cast<float>(params_.start_guidance_reference_distance_m);
   start_guidance_config.max_scale = static_cast<float>(params_.start_guidance_max_scale);
-  start_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-  start_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-  start_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-  start_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
+  start_guidance_config.state_mean = Eigen::Vector4f(
+    static_cast<float>(state_normalization_.first.at(0)),
+    static_cast<float>(state_normalization_.first.at(1)),
+    static_cast<float>(state_normalization_.first.at(2)),
+    static_cast<float>(state_normalization_.first.at(3)));
+  start_guidance_config.state_std = Eigen::Vector4f(
+    static_cast<float>(state_normalization_.second.at(0)),
+    static_cast<float>(state_normalization_.second.at(1)),
+    static_cast<float>(state_normalization_.second.at(2)),
+    static_cast<float>(state_normalization_.second.at(3)));
   start_guidance_ = std::make_shared<StartGuidance>(start_guidance_config);
   start_guidance_->set_enabled(start_guidance_enabled_);
 
   StopGuidanceConfig stop_guidance_config;
   stop_guidance_config.stop_acceleration_mps2 =
     static_cast<float>(params_.stop_guidance_stop_acceleration_mps2);
-  stop_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-  stop_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-  stop_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-  stop_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
+  stop_guidance_config.state_mean = Eigen::Vector4f(
+    static_cast<float>(state_normalization_.first.at(0)),
+    static_cast<float>(state_normalization_.first.at(1)),
+    static_cast<float>(state_normalization_.first.at(2)),
+    static_cast<float>(state_normalization_.first.at(3)));
+  stop_guidance_config.state_std = Eigen::Vector4f(
+    static_cast<float>(state_normalization_.second.at(0)),
+    static_cast<float>(state_normalization_.second.at(1)),
+    static_cast<float>(state_normalization_.second.at(2)),
+    static_cast<float>(state_normalization_.second.at(3)));
   stop_guidance_ = std::make_shared<StopGuidance>(stop_guidance_config);
   stop_guidance_->set_enabled(stop_guidance_enabled_);
 
   CenterlineGuidanceConfig centerline_guidance_config;
   centerline_guidance_config.start_time_s =
     static_cast<float>(params_.centerline_guidance_start_time_s);
-  centerline_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-  centerline_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-  centerline_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-  centerline_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
+  centerline_guidance_config.state_mean = Eigen::Vector4f(
+    static_cast<float>(state_normalization_.first.at(0)),
+    static_cast<float>(state_normalization_.first.at(1)),
+    static_cast<float>(state_normalization_.first.at(2)),
+    static_cast<float>(state_normalization_.first.at(3)));
+  centerline_guidance_config.state_std = Eigen::Vector4f(
+    static_cast<float>(state_normalization_.second.at(0)),
+    static_cast<float>(state_normalization_.second.at(1)),
+    static_cast<float>(state_normalization_.second.at(2)),
+    static_cast<float>(state_normalization_.second.at(3)));
   centerline_guidance_ = std::make_shared<CenterlineGuidance>(centerline_guidance_config);
   centerline_guidance_->set_enabled(centerline_guidance_enabled_);
 
@@ -166,10 +184,16 @@ void DiffusionPlannerCore::update_params(const DiffusionPlannerParams & params)
     StopGuidanceConfig stop_guidance_config;
     stop_guidance_config.stop_acceleration_mps2 =
       static_cast<float>(params_.stop_guidance_stop_acceleration_mps2);
-    stop_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-    stop_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-    stop_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-    stop_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
+    stop_guidance_config.state_mean = Eigen::Vector4f(
+      static_cast<float>(state_normalization_.first.at(0)),
+      static_cast<float>(state_normalization_.first.at(1)),
+      static_cast<float>(state_normalization_.first.at(2)),
+      static_cast<float>(state_normalization_.first.at(3)));
+    stop_guidance_config.state_std = Eigen::Vector4f(
+      static_cast<float>(state_normalization_.second.at(0)),
+      static_cast<float>(state_normalization_.second.at(1)),
+      static_cast<float>(state_normalization_.second.at(2)),
+      static_cast<float>(state_normalization_.second.at(3)));
     stop_guidance_->set_config(stop_guidance_config);
     stop_guidance_->set_enabled(stop_guidance_enabled_);
   }
@@ -177,10 +201,16 @@ void DiffusionPlannerCore::update_params(const DiffusionPlannerParams & params)
     CenterlineGuidanceConfig centerline_guidance_config;
     centerline_guidance_config.start_time_s =
       static_cast<float>(params_.centerline_guidance_start_time_s);
-    centerline_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-    centerline_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-    centerline_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-    centerline_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
+    centerline_guidance_config.state_mean = Eigen::Vector4f(
+      static_cast<float>(state_normalization_.first.at(0)),
+      static_cast<float>(state_normalization_.first.at(1)),
+      static_cast<float>(state_normalization_.first.at(2)),
+      static_cast<float>(state_normalization_.first.at(3)));
+    centerline_guidance_config.state_std = Eigen::Vector4f(
+      static_cast<float>(state_normalization_.second.at(0)),
+      static_cast<float>(state_normalization_.second.at(1)),
+      static_cast<float>(state_normalization_.second.at(2)),
+      static_cast<float>(state_normalization_.second.at(3)));
     centerline_guidance_->set_config(centerline_guidance_config);
     centerline_guidance_->set_enabled(centerline_guidance_enabled_);
   }
