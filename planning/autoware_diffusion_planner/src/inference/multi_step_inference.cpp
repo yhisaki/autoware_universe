@@ -56,6 +56,8 @@ MultiStepInference::MultiStepInference(
     autoware::cuda_utils::make_unique<float[]>(num_elements(diffusion_time_shape));
   ego_history_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(EGO_HISTORY_SHAPE));
+  ego_velocity_past_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(EGO_VELOCITY_SHAPE));
   neighbor_agents_past_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(NEIGHBOR_SHAPE));
   static_objects_d_ = autoware::cuda_utils::make_unique<float[]>(
@@ -121,6 +123,7 @@ void MultiStepInference::load_engines(
     encoder_network_io.emplace_back(name, dims);
   };
   add_encoder_tensor("ego_agent_past", EGO_HISTORY_SHAPE);
+  add_encoder_tensor("ego_velocity_past", EGO_VELOCITY_SHAPE);
   add_encoder_tensor("neighbor_agents_past", NEIGHBOR_SHAPE);
   add_encoder_tensor("static_objects", STATIC_OBJECTS_SHAPE);
   add_encoder_tensor("lanes", LANES_SHAPE);
@@ -183,6 +186,8 @@ void MultiStepInference::bind_encoder_buffers()
   encoder_trt_ptr_->setInputShape(
     "ego_agent_past", to_dims_with_batch(EGO_HISTORY_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
+    "ego_velocity_past", to_dims_with_batch(EGO_VELOCITY_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape(
     "neighbor_agents_past", to_dims_with_batch(NEIGHBOR_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
     "static_objects", to_dims_with_batch(STATIC_OBJECTS_SHAPE, batch_size_));
@@ -207,6 +212,7 @@ void MultiStepInference::bind_encoder_buffers()
     "turn_indicators", to_dims_with_batch(TURN_INDICATORS_SHAPE, batch_size_));
 
   encoder_trt_ptr_->setTensorAddress("ego_agent_past", ego_history_d_.get());
+  encoder_trt_ptr_->setTensorAddress("ego_velocity_past", ego_velocity_past_d_.get());
   encoder_trt_ptr_->setTensorAddress("neighbor_agents_past", neighbor_agents_past_d_.get());
   encoder_trt_ptr_->setTensorAddress("static_objects", static_objects_d_.get());
   encoder_trt_ptr_->setTensorAddress("lanes", lanes_d_.get());
@@ -263,6 +269,7 @@ void MultiStepInference::transfer_inputs_to_device(const preprocess::InputDataMa
 {
   transfer_float_input(input_data_map.at("sampled_trajectories"), sampled_trajectories_d_, stream_);
   transfer_float_input(input_data_map.at("ego_agent_past"), ego_history_d_, stream_);
+  transfer_float_input(input_data_map.at("ego_velocity_past"), ego_velocity_past_d_, stream_);
   transfer_float_input(input_data_map.at("neighbor_agents_past"), neighbor_agents_past_d_, stream_);
   transfer_float_input(input_data_map.at("static_objects"), static_objects_d_, stream_);
   transfer_float_input(input_data_map.at("lanes"), lanes_d_, stream_);

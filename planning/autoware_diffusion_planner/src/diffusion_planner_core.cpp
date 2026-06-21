@@ -359,6 +359,10 @@ InputDataMap DiffusionPlannerCore::create_input_data(const FrameContext & frame_
       ego_history_, EGO_HISTORY_SHAPE[1], map_to_ego_transform, reference_time);
     input_data_map["ego_agent_past"] =
       utils::replicate_for_batch(single_ego_agent_past, params_.batch_size);
+    const std::vector<float> single_ego_velocity_past =
+      preprocess::create_ego_velocity(ego_history_, EGO_VELOCITY_SHAPE[1], reference_time);
+    input_data_map["ego_velocity_past"] =
+      utils::replicate_for_batch(single_ego_velocity_past, params_.batch_size);
   }
   // Ego state
   {

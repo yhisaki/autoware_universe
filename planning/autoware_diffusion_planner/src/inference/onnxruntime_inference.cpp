@@ -94,6 +94,7 @@ std::vector<FloatInput> single_step_float_inputs(const preprocess::InputDataMap 
   return {
     {"sampled_trajectories", &input_data_map.at("sampled_trajectories")},
     {"ego_agent_past", &input_data_map.at("ego_agent_past")},
+    {"ego_velocity_past", &input_data_map.at("ego_velocity_past")},
     {"ego_current_state", &input_data_map.at("ego_current_state")},
     {"neighbor_agents_past", &input_data_map.at("neighbor_agents_past")},
     {"static_objects", &input_data_map.at("static_objects")},
@@ -113,6 +114,7 @@ std::vector<FloatInput> encoder_float_inputs(const preprocess::InputDataMap & in
 {
   return {
     {"ego_agent_past", &input_data_map.at("ego_agent_past")},
+    {"ego_velocity_past", &input_data_map.at("ego_velocity_past")},
     {"neighbor_agents_past", &input_data_map.at("neighbor_agents_past")},
     {"static_objects", &input_data_map.at("static_objects")},
     {"lanes", &input_data_map.at("lanes")},
@@ -233,6 +235,11 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
       add_float_tensor(
         name, data,
         {static_cast<int64_t>(data.size() / ((INPUT_T + 1) * POSE_DIM)), INPUT_T + 1, POSE_DIM});
+    } else if (name == "ego_velocity_past") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(data.size() / ((INPUT_T + 1) * EGO_VELOCITY_DIM)), INPUT_T + 1,
+         EGO_VELOCITY_DIM});
     } else if (name == "ego_current_state") {
       add_float_tensor(name, data, {static_cast<int64_t>(data.size() / 10), 10});
     } else if (name == "neighbor_agents_past") {
