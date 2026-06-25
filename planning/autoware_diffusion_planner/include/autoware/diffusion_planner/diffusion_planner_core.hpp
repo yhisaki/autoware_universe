@@ -337,6 +337,8 @@ private:
   AgentData agent_data_;
   std::map<lanelet::Id, TrafficSignalStamped> traffic_light_id_map_;
   std::vector<std::vector<std::vector<Eigen::Matrix4d>>> last_agent_poses_map_;
+  std::vector<std::vector<Eigen::Matrix4d>> copied_ego_prefix_map_;
+  int64_t copied_ego_prefix_steps_{0};
 
   // Lanelet map
   LaneletRoute::ConstSharedPtr route_ptr_;

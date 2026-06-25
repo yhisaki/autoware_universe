@@ -100,11 +100,12 @@ private:
   void bind_turn_indicator_buffers();
   void transfer_inputs_to_device(const preprocess::InputDataMap & input_data_map);
   DpmSolver::SampleResult run_dpm_solver(const preprocess::InputDataMap & input_data_map);
-  std::vector<float> evaluate_decoder(const std::vector<float> & x, float t);
-  std::vector<float> create_diffusion_time(float t) const;
+  std::vector<float> evaluate_decoder(const std::vector<float> & x, float t, int64_t delay_step);
+  std::vector<float> create_diffusion_time(float t, int64_t delay_step) const;
   std::vector<float> create_current_states(const preprocess::InputDataMap & input_data_map) const;
   void apply_prefix_constraint(
-    std::vector<float> & x, const std::vector<float> & current_states) const;
+    std::vector<float> & x, const std::vector<float> & current_states,
+    const std::vector<float> & sampled_trajectories, int64_t delay_step) const;
 };
 
 }  // namespace autoware::diffusion_planner

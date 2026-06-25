@@ -321,6 +321,12 @@ InputDataMap DiffusionPlannerCore::create_input_data(const FrameContext & frame_
   {
     const int64_t copy_steps = std::clamp<int64_t>(params_.delay_step, 0, OUTPUT_T / 2);
     const bool has_previous_output = !last_agent_poses_map_.empty();
+    copied_ego_prefix_map_.clear();
+    copied_ego_prefix_steps_ = 0;
+    if (params_.model_type == "multi_step" && has_previous_output && copy_steps > 0) {
+      copied_ego_prefix_map_.resize(params_.batch_size);
+      copied_ego_prefix_steps_ = copy_steps;
+    }
 
     for (int64_t b = 0; b < params_.batch_size; b++) {
       std::vector<float> sampled_trajectories =
@@ -329,10 +335,13 @@ InputDataMap DiffusionPlannerCore::create_input_data(const FrameContext & frame_
       if (has_previous_output) {
         constexpr int64_t agent_idx = 0;
         delay_step = copy_steps;
-        for (int64_t t = 0; t <= copy_steps; ++t) {
-          const size_t dst_base = agent_idx * (OUTPUT_T + 1) * POSE_DIM + (t)*POSE_DIM;
+        for (int64_t t = 1; t <= copy_steps; ++t) {
+          const size_t dst_base = agent_idx * (OUTPUT_T + 1) * POSE_DIM + t * POSE_DIM;
           const Eigen::Matrix4d pose_ego =
             map_to_ego_transform * last_agent_poses_map_[b][agent_idx][t];
+          if (params_.model_type == "multi_step") {
+            copied_ego_prefix_map_[b].push_back(last_agent_poses_map_[b][agent_idx][t]);
+          }
           const float shifted_x = static_cast<float>(pose_ego(0, 3));
           const float shifted_y = static_cast<float>(pose_ego(1, 3));
           const auto [shifted_cos, shifted_sin] =
@@ -507,6 +516,37 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
 
   const auto agent_poses =
     postprocess::parse_predictions(denormalized_predictions, frame_context.ego_to_map_transform);
+
+  if (copied_ego_prefix_steps_ > 0) {
+    constexpr int64_t ego_agent_idx = 0;
+    constexpr double position_tolerance_m = 1.0e-2;
+    constexpr double heading_tolerance = 1.0e-3;
+    if (copied_ego_prefix_map_.size() != static_cast<size_t>(params_.batch_size)) {
+      throw std::runtime_error("Copied ego prefix validation failed: batch size mismatch.");
+    }
+    for (int64_t b = 0; b < params_.batch_size; ++b) {
+      if (copied_ego_prefix_map_[b].size() != static_cast<size_t>(copied_ego_prefix_steps_)) {
+        throw std::runtime_error("Copied ego prefix validation failed: prefix size mismatch.");
+      }
+      for (int64_t step = 1; step <= copied_ego_prefix_steps_; ++step) {
+        const auto & expected_pose = copied_ego_prefix_map_[b][step - 1];
+        const auto & actual_pose = agent_poses[b][ego_agent_idx][step - 1];
+        const double position_error = std::hypot(
+          actual_pose(0, 3) - expected_pose(0, 3), actual_pose(1, 3) - expected_pose(1, 3));
+        const double cos_error = std::abs(actual_pose(0, 0) - expected_pose(0, 0));
+        const double sin_error = std::abs(actual_pose(1, 0) - expected_pose(1, 0));
+        if (
+          position_error > position_tolerance_m || cos_error > heading_tolerance ||
+          sin_error > heading_tolerance) {
+          throw std::runtime_error(
+            "Copied ego prefix validation failed: batch=" + std::to_string(b) +
+            " step=" + std::to_string(step) + " position_error=" + std::to_string(position_error) +
+            " cos_error=" + std::to_string(cos_error) + " sin_error=" + std::to_string(sin_error));
+        }
+      }
+    }
+  }
+
   last_agent_poses_map_ = agent_poses;
 
   const bool enable_force_stop =

@@ -19,6 +19,7 @@
 
 #include <autoware/cuda_utils/cuda_check_error.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <memory>
@@ -32,6 +33,20 @@ namespace autoware::diffusion_planner
 {
 using autoware::tensorrt_common::NetworkIO;
 using autoware::tensorrt_common::ProfileDims;
+
+namespace
+{
+constexpr int64_t k_ego_agent_index = 0;
+
+int64_t get_delay_step(const preprocess::InputDataMap & input_data_map)
+{
+  const auto delay_it = input_data_map.find("delay");
+  if (delay_it == input_data_map.end() || delay_it->second.empty()) {
+    return 0;
+  }
+  return std::clamp(static_cast<int64_t>(delay_it->second.front()), int64_t{0}, OUTPUT_T);
+}
+}  // namespace
 
 MultiStepInference::MultiStepInference(
   const std::string & encoder_model_path, const std::string & decoder_model_path,
@@ -292,9 +307,18 @@ void MultiStepInference::transfer_inputs_to_device(const preprocess::InputDataMa
     batch_size_ * num_elements_without_batch(ROUTE_LANES_SPEED_LIMIT_SHAPE), stream_);
 }
 
-std::vector<float> MultiStepInference::create_diffusion_time(float t) const
+std::vector<float> MultiStepInference::create_diffusion_time(float t, int64_t delay_step) const
 {
-  return std::vector<float>(batch_size_ * MAX_NUM_AGENTS * (OUTPUT_T + 1), t);
+  std::vector<float> diffusion_time(batch_size_ * MAX_NUM_AGENTS * (OUTPUT_T + 1), t);
+  delay_step = std::clamp<int64_t>(delay_step, 0, OUTPUT_T);
+  for (int b = 0; b < batch_size_; ++b) {
+    for (int64_t step = 0; step <= delay_step; ++step) {
+      const size_t index =
+        (static_cast<size_t>(b) * MAX_NUM_AGENTS + k_ego_agent_index) * (OUTPUT_T + 1) + step;
+      diffusion_time[index] = 0.0f;
+    }
+  }
+  return diffusion_time;
 }
 
 std::vector<float> MultiStepInference::create_current_states(
@@ -325,8 +349,10 @@ std::vector<float> MultiStepInference::create_current_states(
 }
 
 void MultiStepInference::apply_prefix_constraint(
-  std::vector<float> & x, const std::vector<float> & current_states) const
+  std::vector<float> & x, const std::vector<float> & current_states,
+  const std::vector<float> & sampled_trajectories, int64_t delay_step) const
 {
+  delay_step = std::clamp<int64_t>(delay_step, 0, OUTPUT_T);
   for (int b = 0; b < batch_size_; ++b) {
     for (int64_t agent = 0; agent < MAX_NUM_AGENTS; ++agent) {
       for (int64_t d = 0; d < POSE_DIM; ++d) {
@@ -336,12 +362,23 @@ void MultiStepInference::apply_prefix_constraint(
         x[x_idx] = current_states[current_idx];
       }
     }
+
+    for (int64_t step = 1; step <= delay_step; ++step) {
+      for (int64_t d = 0; d < POSE_DIM; ++d) {
+        const size_t idx =
+          ((static_cast<size_t>(b) * MAX_NUM_AGENTS + k_ego_agent_index) * (OUTPUT_T + 1) + step) *
+            POSE_DIM +
+          d;
+        x[idx] = sampled_trajectories[idx];
+      }
+    }
   }
 }
 
-std::vector<float> MultiStepInference::evaluate_decoder(const std::vector<float> & x, float t)
+std::vector<float> MultiStepInference::evaluate_decoder(
+  const std::vector<float> & x, float t, int64_t delay_step)
 {
-  const auto diffusion_time = create_diffusion_time(t);
+  const auto diffusion_time = create_diffusion_time(t, delay_step);
   CHECK_CUDA_ERROR(cudaMemcpyAsync(
     sampled_trajectories_d_.get(), x.data(), x.size() * sizeof(float), cudaMemcpyHostToDevice,
     stream_));
@@ -368,11 +405,14 @@ DpmSolver::SampleResult MultiStepInference::run_dpm_solver(
   const preprocess::InputDataMap & input_data_map)
 {
   const std::vector<float> current_states = create_current_states(input_data_map);
-  const auto model_fn = [this](const std::vector<float> & x, float timestep) {
-    return evaluate_decoder(x, timestep);
+  const auto & sampled_trajectories = input_data_map.at("sampled_trajectories");
+  const int64_t delay_step = get_delay_step(input_data_map);
+  const auto model_fn = [this, delay_step](const std::vector<float> & x, float timestep) {
+    return evaluate_decoder(x, timestep, delay_step);
   };
-  const auto correcting_fn = [this, &current_states](std::vector<float> & x) {
-    apply_prefix_constraint(x, current_states);
+  const auto correcting_fn = [this, &current_states, &sampled_trajectories,
+                              delay_step](std::vector<float> & x) {
+    apply_prefix_constraint(x, current_states, sampled_trajectories, delay_step);
   };
 
   const DpmSolver solver(dpm_solver_steps_);
