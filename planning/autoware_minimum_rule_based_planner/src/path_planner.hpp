@@ -150,20 +150,18 @@ namespace utils
 {
 
 /**
- * @brief get lanelets that are in desired_distance (or min_distance at least) backward from target
- * lanelet
+ * @brief get lanelets that are in specified distance backward from target lanelet
  */
 lanelet::ConstLanelets get_lanelets_up_to(
-  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data,
-  const double desired_distance, const double min_distance);
+  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data, const double distance,
+  const double offset_distance);
 
 /**
- * @brief get lanelets that are in specified distance forward (or min_distance at least) from target
- * lanelet
+ * @brief get lanelets that are in specified distance forward from target lanelet
  */
 lanelet::ConstLanelets get_lanelets_after(
-  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data,
-  const double desired_distance, const double min_distance);
+  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data, const double distance,
+  const double offset_distance);
 
 /**
  * @brief get lanelets within route that are in specified distance backward from target lanelet

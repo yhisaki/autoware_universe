@@ -197,18 +197,18 @@ lanelet::BasicPoints3d to_lanelet_points(
 }  // namespace
 
 lanelet::ConstLanelets get_lanelets_up_to(
-  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data,
-  const double desired_distance, const double min_distance)
+  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data, const double distance,
+  const double offset_distance)
 {
-  auto lanelets = utils::get_lanelets_within_route_up_to(lanelet, planner_data, desired_distance);
+  auto lanelets = utils::get_lanelets_within_route_up_to(lanelet, planner_data, distance);
   if (!lanelets.has_value()) {
     lanelets.emplace();
   }
 
-  // Extend lanelets by min_distance even outside planned route to ensure ego footprint is inside
+  // Extend lanelets by offset_distance even outside planned route to ensure ego footprint is inside
   // lanelets if ego is at the beginning of start lane
-  auto lanelets_length = lanelet::utils::getLaneletLength2d(*lanelets);
-  while (lanelets_length < min_distance) {
+  auto lanelets_length = 0.0;
+  while (lanelets_length < offset_distance) {
     const auto prev_lanelets =
       planner_data.routing_graph_ptr->previous(lanelets->empty() ? lanelet : lanelets->front());
     if (prev_lanelets.empty()) {
@@ -222,18 +222,36 @@ lanelet::ConstLanelets get_lanelets_up_to(
 }
 
 lanelet::ConstLanelets get_lanelets_after(
-  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data,
-  const double desired_distance, const double min_distance)
+  const lanelet::ConstLanelet & lanelet, const RouteContext & planner_data, const double distance,
+  const double offset_distance)
 {
-  auto lanelets = utils::get_lanelets_within_route_after(lanelet, planner_data, desired_distance);
+  auto lanelets = utils::get_lanelets_within_route_after(lanelet, planner_data, distance);
   if (!lanelets.has_value()) {
     return {};
   }
 
-  // Extend lanelets by min_distance even outside planned route to ensure ego footprint is inside
+  auto preferred_it = std::find_if(
+    planner_data.preferred_lanelets.begin(), planner_data.preferred_lanelets.end(),
+    [&](const lanelet::ConstLanelet & preferred_lanelet) {
+      return preferred_lanelet.id() == (lanelets->empty() ? lanelet : lanelets->back()).id();
+    });
+  if (preferred_it == planner_data.preferred_lanelets.end()) {
+    // Last path lanelet is not preferred, and ego requires lane change
+    return *lanelets;
+  }
+  if (preferred_it != std::prev(planner_data.preferred_lanelets.end())) {
+    const auto next_lanelets = planner_data.routing_graph_ptr->following(lanelet);
+    if (next_lanelets.empty() || !exists(next_lanelets, *std::next(preferred_it))) {
+      // Next preferred lanelet is not connected directly to the current lanelet,
+      // and ego requires lane change
+      return *lanelets;
+    }
+  }
+
+  // Extend lanelets by offset_distance even outside planned route to ensure ego footprint is inside
   // lanelets if ego is at the end of end lane
-  auto lanelets_length = lanelet::utils::getLaneletLength2d(*lanelets);
-  while (lanelets_length < min_distance) {
+  auto lanelets_length = 0.0;
+  while (lanelets_length < offset_distance) {
     const auto next_lanelets =
       planner_data.routing_graph_ptr->following(lanelets->empty() ? lanelet : lanelets->back());
     if (next_lanelets.empty()) {
