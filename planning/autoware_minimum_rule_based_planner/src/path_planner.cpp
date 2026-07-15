@@ -230,22 +230,8 @@ lanelet::ConstLanelets get_lanelets_after(
     return {};
   }
 
-  auto preferred_it = std::find_if(
-    planner_data.preferred_lanelets.begin(), planner_data.preferred_lanelets.end(),
-    [&](const lanelet::ConstLanelet & preferred_lanelet) {
-      return preferred_lanelet.id() == (lanelets->empty() ? lanelet : lanelets->back()).id();
-    });
-  if (preferred_it == planner_data.preferred_lanelets.end()) {
-    // Last path lanelet is not preferred, and ego requires lane change
+  if (!lanelets->empty() && !exists(planner_data.goal_lanelets, lanelets->back())) {
     return *lanelets;
-  }
-  if (preferred_it != std::prev(planner_data.preferred_lanelets.end())) {
-    const auto next_lanelets = planner_data.routing_graph_ptr->following(lanelet);
-    if (next_lanelets.empty() || !exists(next_lanelets, *std::next(preferred_it))) {
-      // Next preferred lanelet is not connected directly to the current lanelet,
-      // and ego requires lane change
-      return *lanelets;
-    }
   }
 
   // Extend lanelets by offset_distance even outside planned route to ensure ego footprint is inside
