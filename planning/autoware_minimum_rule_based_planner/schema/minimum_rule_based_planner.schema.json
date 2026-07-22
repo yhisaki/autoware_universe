@@ -51,20 +51,32 @@
               "default": 0.0,
               "minimum": 0.0
             },
-            "smooth_goal_connection": {
+            "early_stop": {
               "type": "object",
               "properties": {
-                "search_radius_range": {
+                "expected_ego_speed_parking": {
                   "type": "number",
-                  "description": "Search radius for goal connection [m]",
-                  "default": 7.5,
+                  "description": "expected ego speed during pull over to the side of the road [m/s]",
+                  "default": 2.8,
                   "minimum": 0.0
                 },
-                "pre_goal_offset": {
+                "max_lat_accel_parking": {
                   "type": "number",
-                  "description": "Offset before goal for smooth connection [m]",
-                  "default": 1.0,
+                  "description": "expected max lateral acceleration during pull over to the side of the road [m/s^2]",
+                  "default": 0.8,
                   "minimum": 0.0
+                },
+                "max_decel_parking": {
+                  "type": "number",
+                  "description": "max longitudinal deceleration used to compute the stopping distance during pull over [m/s^2]",
+                  "default": 1.0,
+                  "minimum": 0.1
+                },
+                "max_jerk_parking": {
+                  "type": "number",
+                  "description": "max longitudinal jerk used to compute the stopping distance during pull over [m/s^3]",
+                  "default": 1.0,
+                  "minimum": 0.1
                 }
               },
               "required": [],

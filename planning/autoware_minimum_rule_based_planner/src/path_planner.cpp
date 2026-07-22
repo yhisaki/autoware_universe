@@ -14,6 +14,8 @@
 
 #include "path_planner.hpp"
 
+#include <autoware/lanelet2_utils/kind.hpp>
+#include <autoware/motion_utils/distance/distance.hpp>
 #include <autoware/motion_utils/resample/resample.hpp>
 #include <autoware/motion_utils/trajectory/conversion.hpp>
 #include <autoware/motion_utils/trajectory/trajectory.hpp>
@@ -39,6 +41,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -861,64 +864,6 @@ PathRange<std::optional<double>> get_arc_length_on_centerline(
     s_right_centerline ? s_right_centerline : s_right_bound};
 }
 
-PathPointTrajectory refine_path_for_goal(
-  const PathPointTrajectory & input, const geometry_msgs::msg::Pose & goal_pose,
-  const lanelet::Id goal_lane_id, const double search_radius_range, const double pre_goal_offset)
-{
-  auto contain_goal_lane_id = [&](const PathPointWithLaneId & point) {
-    const auto & ids = point.lane_ids;
-    return std::find(ids.begin(), ids.end(), goal_lane_id) != ids.end();
-  };
-
-  auto outside_circle = [&](const PathPointWithLaneId & point) {
-    return autoware_utils::calc_distance2d(point.point.pose, goal_pose) > search_radius_range;
-  };
-
-  auto closest_to_goal = autoware::experimental::trajectory::closest_with_constraint(
-    input, goal_pose, contain_goal_lane_id);
-
-  // If no point with the goal lane ID exists in the trajectory (e.g. goal is on an adjacent lane),
-  // fall back to the geometrically closest point so the goal connection still applies.
-  if (!closest_to_goal) {
-    closest_to_goal = autoware::experimental::trajectory::closest(input, goal_pose);
-  }
-
-  auto cropped_path = autoware::experimental::trajectory::crop(input, 0, *closest_to_goal);
-
-  auto intervals =
-    autoware::experimental::trajectory::find_intervals(cropped_path, outside_circle, 10);
-
-  std::vector<PathPointWithLaneId> goal_connected_trajectory_points;
-
-  if (!intervals.empty()) {
-    auto cropped = autoware::experimental::trajectory::crop(cropped_path, 0, intervals.back().end);
-    goal_connected_trajectory_points = cropped.restore();
-  } else if (cropped_path.length() > pre_goal_offset) {
-    // If distance from start to goal is smaller than refine_goal_search_radius_range and start is
-    // farther from goal than pre_goal, we just connect start, pre_goal, and goal.
-    goal_connected_trajectory_points = {cropped_path.compute(0)};
-  }
-
-  auto goal = input.compute(autoware::experimental::trajectory::closest(input, goal_pose));
-  goal.point.pose = goal_pose;
-  goal.point.longitudinal_velocity_mps = 0.0;
-
-  const auto pre_goal_pose =
-    autoware_utils::calc_offset_pose(goal_pose, -pre_goal_offset, 0.0, 0.0);
-  auto pre_goal = input.compute(autoware::experimental::trajectory::closest(input, pre_goal_pose));
-  pre_goal.point.pose = pre_goal_pose;
-
-  goal_connected_trajectory_points.push_back(pre_goal);
-  goal_connected_trajectory_points.push_back(goal);
-
-  if (
-    const auto output =
-      autoware::experimental::trajectory::pretty_build(goal_connected_trajectory_points)) {
-    return *output;
-  }
-  return input;
-}
-
 lanelet::ConstLanelets extract_lanelets_from_trajectory(
   const PathPointTrajectory & trajectory, const RouteContext & planner_data)
 {
@@ -946,50 +891,6 @@ bool is_trajectory_inside_lanelets(
   return std::none_of(points.begin(), points.end(), [&](const auto & point) {
     return !is_in_lanelets(point.point.pose, lanelets);
   });
-}
-
-std::optional<PathPointTrajectory> modify_path_for_smooth_goal_connection(
-  const PathPointTrajectory & trajectory, const RouteContext & planner_data,
-  const double search_radius_range, const double pre_goal_offset)
-{
-  if (planner_data.preferred_lanelets.empty()) {
-    return std::nullopt;
-  }
-  // Build the set of lanelets valid for the refined path.
-  // Include goal lanelets so that a path connecting to an adjacent goal lane passes validation.
-  auto lanelets = extract_lanelets_from_trajectory(trajectory, planner_data);
-  for (const auto & goal_ll : planner_data.goal_lanelets) {
-    if (std::find(lanelets.begin(), lanelets.end(), goal_ll) == lanelets.end()) {
-      lanelets.push_back(goal_ll);
-    }
-  }
-
-  // Include lanelets that contain the goal pose (e.g., shoulder lanelets) so that
-  // the trajectory connecting to an off-lane goal passes the inside-lanelets check.
-  const auto goal_point_2d =
-    lanelet::BasicPoint2d(planner_data.goal_pose.position.x, planner_data.goal_pose.position.y);
-  const auto nearest_lanelets =
-    lanelet::geometry::findNearest(planner_data.lanelet_map_ptr->laneletLayer, goal_point_2d, 5);
-  for (const auto & [dist, ll] : nearest_lanelets) {
-    if (
-      lanelet::geometry::inside(ll, goal_point_2d) &&
-      std::find(lanelets.begin(), lanelets.end(), ll) == lanelets.end()) {
-      lanelets.push_back(ll);
-    }
-  }
-
-  // This process is to fit the trajectory inside the lanelets. By reducing
-  // refine_goal_search_radius_range, we can fit the trajectory inside lanelets even if the
-  // trajectory has a high curvature.
-  for (double s = search_radius_range; s > 0; s -= 0.1) {
-    const auto refined_trajectory = refine_path_for_goal(
-      trajectory, planner_data.goal_pose, planner_data.preferred_lanelets.back().id(), s,
-      pre_goal_offset);
-    if (is_trajectory_inside_lanelets(refined_trajectory, lanelets)) {
-      return refined_trajectory;
-    }
-  }
-  return std::nullopt;
 }
 
 }  // namespace utils
@@ -1074,6 +975,111 @@ double signed_curvature_3pt(
   return 2.0 * cross / denom;
 }
 
+std::optional<double> cal_margin2goal(
+  const double target_lat_dist, const double expected_ego_speed_parking,
+  const double max_lat_accel_parking, const double max_decel_parking, const double max_jerk_parking)
+{
+  if (max_lat_accel_parking < 1e-9) {
+    return std::nullopt;
+  }
+  constexpr double initial_accel_stopping = 0.0;
+  constexpr double initial_delay_stopping = 0.0;
+  const auto dist_to_stop = autoware::motion_utils::calculate_stop_distance(
+    expected_ego_speed_parking, initial_accel_stopping, max_decel_parking, max_jerk_parking,
+    initial_delay_stopping);
+  if (!dist_to_stop.has_value()) {
+    return std::nullopt;
+  }
+
+  const double dist_to_limit_lat_accel =
+    expected_ego_speed_parking *
+    std::sqrt(2 * autoware_utils::pi * std::abs(target_lat_dist) / max_lat_accel_parking);
+  return dist_to_limit_lat_accel + *dist_to_stop;
+}
+
+std::optional<double> cal_early_stop(
+  const PathPointTrajectory & trajectory, const RouteContext & planner_data,
+  const double expected_ego_speed_parking, const double max_lat_accel_parking,
+  const double max_decel_parking, const double max_jerk_parking)
+{
+  const auto goal_point_2d =
+    lanelet::BasicPoint2d(planner_data.goal_pose.position.x, planner_data.goal_pose.position.y);
+  const auto nearest_lanelets =
+    lanelet::geometry::findNearest(planner_data.lanelet_map_ptr->laneletLayer, goal_point_2d, 5);
+
+  lanelet::ConstLanelets goal_lanelets;
+  auto add_to_goal_lanelets = [&](const auto & lls) {
+    for (const auto & ll : lls) {
+      if (
+        autoware::experimental::lanelet2_utils::is_road_lane(ll) &&
+        std::find(goal_lanelets.begin(), goal_lanelets.end(), ll) == goal_lanelets.end()) {
+        goal_lanelets.push_back(ll);
+      }
+    }
+  };
+  for (const auto & [dist, ll] : nearest_lanelets) {
+    if (
+      lanelet::geometry::inside(ll, goal_point_2d) &&
+      std::find(goal_lanelets.begin(), goal_lanelets.end(), ll) == goal_lanelets.end()) {
+      if (autoware::experimental::lanelet2_utils::is_shoulder_lane(ll)) {
+        const auto left_lanelets =
+          planner_data.lanelet_map_ptr->laneletLayer.findUsages(ll.leftBound());
+        add_to_goal_lanelets(left_lanelets);
+
+        const auto right_lanelets =
+          planner_data.lanelet_map_ptr->laneletLayer.findUsages(ll.rightBound());
+        add_to_goal_lanelets(right_lanelets);
+      } else {
+        goal_lanelets.push_back(ll);
+      }
+    }
+  }
+
+  std::unordered_set<lanelet::Id> goal_neighbors;
+  for (const auto & lanelet : goal_lanelets) {
+    goal_neighbors.insert(lanelet.id());
+    const auto left_lanelets = planner_data.routing_graph_ptr->lefts(lanelet);
+    for (const auto & left_lanelet : left_lanelets) {
+      goal_neighbors.insert(left_lanelet.id());
+    }
+
+    const auto right_lanelets = planner_data.routing_graph_ptr->rights(lanelet);
+    for (const auto & right_lanelet : right_lanelets) {
+      goal_neighbors.insert(right_lanelet.id());
+    }
+  }
+
+  const auto trajectory_lanelets =
+    autoware::minimum_rule_based_planner::utils::extract_lanelets_from_trajectory(
+      trajectory, planner_data);
+
+  bool goal_reachable = false;
+  for (const auto & lanelet_traj : trajectory_lanelets) {
+    if (goal_neighbors.count(lanelet_traj.id())) {
+      goal_reachable = true;
+      break;
+    }
+  }
+
+  if (!goal_reachable) {
+    // goal offset function is disabled when planed trajectory don't include goal
+    return 0.0;
+  }
+
+  double target_lat_dist = std::numeric_limits<double>::max();
+  for (const auto & lanelet : trajectory_lanelets) {
+    const double tmp_dist = lanelet::geometry::distanceToCenterline2d(lanelet, goal_point_2d);
+    target_lat_dist = std::min(target_lat_dist, tmp_dist);
+  }
+
+  const auto dist_offset = cal_margin2goal(
+    target_lat_dist, expected_ego_speed_parking, max_lat_accel_parking, max_decel_parking,
+    max_jerk_parking);
+  if (!dist_offset.has_value()) {
+    return std::nullopt;
+  }
+  return *dist_offset;
+}
 // ---------------------------------------------------------------------------
 // Lane-change interpolation helpers
 // ---------------------------------------------------------------------------
@@ -1504,33 +1510,22 @@ std::optional<PathWithLaneId> PathPlanner::generate_path(
   // Adjust s_path_end relative to the new trajectory origin
   const auto adjusted_s_path_end = s_path_end - s_path_start;
 
-  // Check if the goal point is in the search range
-  // Note: We only see if the goal is approaching the tail of the path.
-  const auto s_path_end_clamped = std::min(trajectory->length(), adjusted_s_path_end);
-  const auto distance_to_goal = autoware_utils::calc_distance2d(
-    trajectory->compute(s_path_end_clamped), route_context_.goal_pose);
-
-  bool goal_connection_applied = false;
-  if (distance_to_goal < params_.path_planning.smooth_goal_connection.search_radius_range) {
-    auto refined_path = utils::modify_path_for_smooth_goal_connection(
-      *trajectory, route_context_, params_.path_planning.smooth_goal_connection.search_radius_range,
-      params_.path_planning.smooth_goal_connection.pre_goal_offset);
-
-    if (refined_path) {
-      refined_path->align_orientation_with_trajectory_direction();
-      *trajectory = *refined_path;
-      goal_connection_applied = true;
-    }
+  // Offset end point to stop before goal
+  const auto early_stop_dist = cal_early_stop(
+    *trajectory, route_context_, params_.path_planning.early_stop.expected_ego_speed_parking,
+    params_.path_planning.early_stop.max_lat_accel_parking,
+    params_.path_planning.early_stop.max_decel_parking,
+    params_.path_planning.early_stop.max_jerk_parking);
+  if (!early_stop_dist.has_value()) {
+    RCLCPP_ERROR(logger_, "Failed to calculate early stop distance");
+    return std::nullopt;
   }
+  const double adjusted_s_path_end_earlystop =
+    std::max(0.0, adjusted_s_path_end - *early_stop_dist);
 
   // Crop end
-  if (!goal_connection_applied && trajectory->length() > adjusted_s_path_end) {
-    trajectory->crop(0., adjusted_s_path_end);
-  }
-
-  if (trajectory->length() < 1e-3) {
-    RCLCPP_WARN(logger_, "Trajectory length too short after cropping: %f", trajectory->length());
-    return std::nullopt;
+  if (trajectory->length() > adjusted_s_path_end_earlystop) {
+    trajectory->crop(0., adjusted_s_path_end_earlystop);
   }
 
   // Compose the polished path
