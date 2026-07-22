@@ -360,8 +360,8 @@ Interval refine_path_range(
     range.end, lanelet::geometry::length2d(lanelet_sequence) -
                  vehicle_info.max_longitudinal_offset_m - stop_margin);
 
-  for (auto [it, goal_arc_length] = std::make_tuple(lanelet_sequence.begin(), 0.);
-       it != lanelet_sequence.end(); ++it) {
+  auto goal_arc_length = 0.;
+  for (auto it = lanelet_sequence.begin(); it != lanelet_sequence.end(); ++it) {
     if (std::any_of(
           planner_data.goal_lanelets.begin(), planner_data.goal_lanelets.end(),
           [&](const auto & goal_ll) { return it->id() == goal_ll.id(); })) {
