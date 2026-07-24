@@ -121,7 +121,7 @@ TEST(PathPlannerTest, ConstructWithoutNode)
 // shift_trajectory_to_ego tests
 // ============================================================
 
-TEST(PathPlannerTest, ShiftNotNeeded)
+TEST(PathPlannerTest, ShiftAlwaysStartsAtEgo)
 {
   auto logger = rclcpp::get_logger("test_path_planner");
   auto clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
@@ -132,8 +132,8 @@ TEST(PathPlannerTest, ShiftNotNeeded)
   PathPlanner planner(logger, clock, make_time_keeper(), params, vehicle_info);
 
   auto traj = make_straight_trajectory(20, 1.0, 10.0f);
-  // Ego is exactly on the trajectory → no shift needed
-  auto ego_pose = make_pose(0.0, 0.0, 0.0);
+  // Keep the offset below the former shift threshold.
+  auto ego_pose = make_pose(0.0, 0.05, 0.0);
 
   TrajectoryShiftParams shift_params;
   shift_params.minimum_shift_length = 0.1;
@@ -141,12 +141,11 @@ TEST(PathPlannerTest, ShiftNotNeeded)
 
   const auto result = planner.shift_trajectory_to_ego(traj, ego_pose, 10.0, 0.0, shift_params, 1.0);
 
-  // Should return the trajectory unchanged since offset and yaw are below threshold
-  ASSERT_EQ(result.points.size(), traj.points.size());
-  for (size_t i = 0; i < result.points.size(); ++i) {
-    EXPECT_NEAR(result.points[i].pose.position.x, traj.points[i].pose.position.x, 1e-3);
-    EXPECT_NEAR(result.points[i].pose.position.y, traj.points[i].pose.position.y, 1e-3);
-  }
+  ASSERT_FALSE(result.points.empty());
+  EXPECT_NEAR(result.points.front().pose.position.x, ego_pose.position.x, 1e-3);
+  EXPECT_NEAR(result.points.front().pose.position.y, ego_pose.position.y, 1e-3);
+  EXPECT_NEAR(result.points.front().pose.orientation.z, ego_pose.orientation.z, 1e-3);
+  EXPECT_NEAR(result.points.front().pose.orientation.w, ego_pose.orientation.w, 1e-3);
 }
 
 TEST(PathPlannerTest, ShiftShortTrajectory)
