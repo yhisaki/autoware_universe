@@ -137,7 +137,6 @@ TEST(PathPlannerTest, ShiftAlwaysStartsAtEgo)
 
   TrajectoryShiftParams shift_params;
   shift_params.minimum_shift_length = 0.1;
-  shift_params.minimum_shift_yaw = 0.1;
 
   const auto result = planner.shift_trajectory_to_ego(traj, ego_pose, 10.0, 0.0, shift_params, 1.0);
 
@@ -189,7 +188,6 @@ TEST(PathPlannerTest, ShiftNormal)
 
   TrajectoryShiftParams shift_params;
   shift_params.minimum_shift_length = 0.1;
-  shift_params.minimum_shift_yaw = 0.1;
   shift_params.minimum_shift_distance = 5.0;
   shift_params.min_speed_for_curvature = 2.77;
   shift_params.lateral_accel_limit = 0.5;
