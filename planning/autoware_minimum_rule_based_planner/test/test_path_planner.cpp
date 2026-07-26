@@ -45,7 +45,6 @@ Params make_default_params()
   params.path_planning.waypoint_group.interval_margin_ratio = 0.5;
   params.path_planning.path_shift.enable = false;
   params.path_planning.path_shift.minimum_shift_length = 0.1;
-  params.path_planning.path_shift.minimum_shift_yaw = 0.1;
   params.path_planning.path_shift.minimum_shift_distance = 5.0;
   params.path_planning.path_shift.min_speed_for_curvature = 2.77;
   params.path_planning.path_shift.lateral_accel_limit = 0.5;
