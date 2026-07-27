@@ -45,6 +45,8 @@ private:
     const TrajectoryPoints & traj_points, const FilterContext & context) const;
   MetricReport check_deceleration(
     const TrajectoryPoints & traj_points, const FilterContext & context) const;
+  MetricReport check_yaw_deviation(
+    const TrajectoryPoints & traj_points, const FilterContext & context) const;
   MetricReport check_velocity_deviation(
     const TrajectoryPoints & traj_points, const FilterContext & context) const;
   MetricReport check_lateral_acceleration(
@@ -59,13 +61,14 @@ private:
   using Checker = MetricReport (TrajectoryFeasibilityFilter::*)(
     const TrajectoryPoints &, const FilterContext &) const;
 
-  inline static const std::array<Checker, 8> checkers_ = {{
+  inline static const std::array<Checker, 9> checkers_ = {{
     &TrajectoryFeasibilityFilter::check_speed,
     &TrajectoryFeasibilityFilter::check_acceleration,
     &TrajectoryFeasibilityFilter::check_deceleration,
     &TrajectoryFeasibilityFilter::check_velocity_deviation,
     &TrajectoryFeasibilityFilter::check_lateral_acceleration,
     &TrajectoryFeasibilityFilter::check_distance_deviation,
+    &TrajectoryFeasibilityFilter::check_yaw_deviation,
     &TrajectoryFeasibilityFilter::check_steering_angle,
     &TrajectoryFeasibilityFilter::check_steering_rate,
   }};  //!< Array of checker functions
@@ -104,6 +107,17 @@ std::pair<double, bool> is_acceleration_ok(
  */
 std::pair<double, bool> is_deceleration_ok(
   const TrajectoryPoints & traj_points, double max_deceleration);
+
+/**
+ * @brief Check if the trajectory respects the maximum yaw deviation from the ego pose.
+ *
+ * @param traj_points Vector of trajectory points to check
+ * @param context Evaluation context containing current odometry
+ * @param max_yaw_deviation Maximum allowed absolute yaw deviation (rad)
+ * @return Pair of max observation and a boolean indicating if no point violated
+ */
+std::pair<double, bool> is_yaw_deviation_ok(
+  const TrajectoryPoints & traj_points, const FilterContext & context, double max_yaw_deviation);
 
 /**
  * @brief Check if the trajectory respects the maximum speed deviation from the ego speed.
