@@ -41,6 +41,8 @@ public:
 private:
   MetricReport check_speed(
     const TrajectoryPoints & traj_points, const FilterContext & context) const;
+  MetricReport check_lanelet_speed_limit(
+    const TrajectoryPoints & traj_points, const FilterContext & context) const;
   MetricReport check_acceleration(
     const TrajectoryPoints & traj_points, const FilterContext & context) const;
   MetricReport check_deceleration(
@@ -61,8 +63,9 @@ private:
   using Checker = MetricReport (TrajectoryFeasibilityFilter::*)(
     const TrajectoryPoints &, const FilterContext &) const;
 
-  inline static const std::array<Checker, 9> checkers_ = {{
+  inline static const std::array<Checker, 10> checkers_ = {{
     &TrajectoryFeasibilityFilter::check_speed,
+    &TrajectoryFeasibilityFilter::check_lanelet_speed_limit,
     &TrajectoryFeasibilityFilter::check_acceleration,
     &TrajectoryFeasibilityFilter::check_deceleration,
     &TrajectoryFeasibilityFilter::check_velocity_deviation,
@@ -86,6 +89,18 @@ private:
  * @return Pair of max observation and a boolean indicating if no point violated
  */
 std::pair<double, bool> is_speed_ok(const TrajectoryPoints & traj_points, double max_speed);
+
+/**
+ * @brief Check if the trajectory respects the speed limit of the lanelet nearest to the ego pose.
+ *
+ * @param traj_points Vector of trajectory points to check
+ * @param context Evaluation context containing current odometry and the lanelet map
+ * @return Pair of the observed speed and a boolean indicating if the speed limit was not violated.
+ * Returns `{0.0, true}` if odometry or the lanelet map is unavailable, and reports the observed
+ * speed as OK if no nearby lanelet declares a speed limit.
+ */
+std::pair<double, bool> is_lanelet_speed_limit_ok(
+  const TrajectoryPoints & traj_points, const FilterContext & context);
 
 /**
  * @brief Check if the trajectory respects the maximum acceleration constraint.
