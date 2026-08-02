@@ -87,6 +87,8 @@ private:
   OrtModel turn_indicator_model_;
   std::vector<float> encoding_;
   std::vector<float> decoder_neighbor_agents_past_;
+  std::vector<float> decoder_agent_shape_;
+  std::vector<float> decoder_agent_label_;
 
   DpmSolver::SampleResult run_dpm_solver(const preprocess::InputDataMap & input_data_map);
   std::vector<float> evaluate_decoder(const std::vector<float> & x, float t);

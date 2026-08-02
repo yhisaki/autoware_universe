@@ -47,21 +47,7 @@ Eigen::Matrix3d quaternion_to_matrix(const geometry_msgs::msg::Quaternion & q_ms
 }
 }  // namespace
 
-std::vector<float> create_float_data(const std::vector<int64_t> & shape, float fill)
-{
-  size_t total_size = 1;
-  for (auto dim : shape) {
-    // Check for overflow before multiplication
-    if (dim > 0 && total_size > std::numeric_limits<size_t>::max() / static_cast<size_t>(dim)) {
-      throw std::overflow_error("Shape dimensions would cause size_t overflow");
-    }
-    total_size *= static_cast<size_t>(dim);
-  }
-  std::vector<float> data(total_size, fill);
-  return data;
-}
-
-bool check_input_map(const std::unordered_map<std::string, std::vector<float>> & input_map)
+bool check_input_map(const std::unordered_map<std::string, xt::xarray<float>> & input_map)
 {
   for (const auto & tup : input_map) {
     if (std::any_of(tup.second.begin(), tup.second.end(), [](const auto & v) {
@@ -103,43 +89,25 @@ std::pair<float, float> rotation_matrix_to_cos_sin(const Eigen::Matrix3d & rotat
   return {std::cos(yaw), std::sin(yaw)};
 }
 
-geometry_msgs::msg::Pose shift_x(const geometry_msgs::msg::Pose & pose, const double shift_length)
-{
-  // Rotation matrix (3x3)
-  Eigen::Matrix3d R = quaternion_to_matrix(pose.orientation);
-
-  // Shift along the x-axis in the local frame
-  Eigen::Vector3d shift_local(shift_length, 0.0, 0.0);
-
-  // Transform shift to the global frame
-  Eigen::Vector3d shift_global = R * shift_local;
-
-  // Create new pose
-  geometry_msgs::msg::Pose shifted_pose = pose;
-  shifted_pose.position.x += shift_global.x();
-  shifted_pose.position.y += shift_global.y();
-  shifted_pose.position.z += shift_global.z();
-
-  return shifted_pose;
-}
-
 Eigen::Matrix4d inverse(const Eigen::Matrix4d & mat)
 {
   return Eigen::Isometry3d(mat).inverse().matrix();
 }
 
-std::vector<float> replicate_for_batch(const std::vector<float> & single_data, const int batch_size)
+xt::xarray<float> replicate_for_batch(const xt::xarray<float> & single_data, const int batch_size)
 {
-  const size_t single_size = single_data.size();
-  const size_t total_size = static_cast<size_t>(batch_size) * single_size;
-
-  std::vector<float> batch_data;
-  batch_data.reserve(total_size);
-
-  for (int i = 0; i < batch_size; ++i) {
-    batch_data.insert(batch_data.end(), single_data.begin(), single_data.end());
+  if (batch_size < 1) {
+    throw std::invalid_argument("batch_size must be positive");
   }
 
+  std::vector<size_t> batch_shape{static_cast<size_t>(batch_size)};
+  batch_shape.insert(batch_shape.end(), single_data.shape().begin(), single_data.shape().end());
+  xt::xarray<float> batch_data = xt::xarray<float>::from_shape(batch_shape);
+  for (int batch = 0; batch < batch_size; ++batch) {
+    std::copy(
+      single_data.cbegin(), single_data.cend(),
+      batch_data.begin() + static_cast<std::ptrdiff_t>(batch * single_data.size()));
+  }
   return batch_data;
 }
 

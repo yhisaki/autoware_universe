@@ -38,11 +38,11 @@ size_t num_elements_from_shape(const std::vector<int64_t> & shape)
   return std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<>());
 }
 
-std::vector<uint8_t> make_speed_mask(const std::vector<float> & speed_limit)
+std::vector<uint8_t> make_speed_mask(const xt::xarray<float> & speed_limit)
 {
   std::vector<uint8_t> mask(speed_limit.size(), 0);
   for (size_t i = 0; i < speed_limit.size(); ++i) {
-    mask[i] = speed_limit[i] > 0.0f ? 1U : 0U;
+    mask[i] = speed_limit.data()[i] > 0.0f ? 1U : 0U;
   }
   return mask;
 }
@@ -50,7 +50,7 @@ std::vector<uint8_t> make_speed_mask(const std::vector<float> & speed_limit)
 struct FloatInput
 {
   std::string name;
-  const std::vector<float> * data;
+  const xt::xarray<float> * data;
 };
 
 void append_cpu_provider(Ort::SessionOptions &)
@@ -80,9 +80,8 @@ void append_tensorrt_provider(
     values.push_back(plugins_path.c_str());
   }
   if (!keys.empty()) {
-    Ort::ThrowOnError(
-      Ort::GetApi().UpdateTensorRTProviderOptions(
-        trt_options, keys.data(), values.data(), keys.size()));
+    Ort::ThrowOnError(Ort::GetApi().UpdateTensorRTProviderOptions(
+      trt_options, keys.data(), values.data(), keys.size()));
   }
   Ort::ThrowOnError(
     Ort::GetApi().SessionOptionsAppendExecutionProvider_TensorRT_V2(session_options, trt_options));
@@ -94,19 +93,23 @@ std::vector<FloatInput> single_step_float_inputs(const preprocess::InputDataMap 
   return {
     {"sampled_trajectories", &input_data_map.at("sampled_trajectories")},
     {"ego_agent_past", &input_data_map.at("ego_agent_past")},
-    {"ego_current_state", &input_data_map.at("ego_current_state")},
     {"neighbor_agents_past", &input_data_map.at("neighbor_agents_past")},
-    {"static_objects", &input_data_map.at("static_objects")},
+    {"agent_shape", &input_data_map.at("agent_shape")},
+    {"agent_label", &input_data_map.at("agent_label")},
     {"lanes", &input_data_map.at("lanes")},
+    {"lane_types", &input_data_map.at("lane_types")},
     {"lanes_speed_limit", &input_data_map.at("lanes_speed_limit")},
     {"route_lanes", &input_data_map.at("route_lanes")},
+    {"route_lane_types", &input_data_map.at("route_lane_types")},
     {"route_lanes_speed_limit", &input_data_map.at("route_lanes_speed_limit")},
-    {"polygons", &input_data_map.at("polygons")},
-    {"line_strings", &input_data_map.at("line_strings")},
+    {"intersection_area", &input_data_map.at("intersection_area")},
+    {"stop_lines", &input_data_map.at("stop_lines")},
+    {"road_borders", &input_data_map.at("road_borders")},
     {"goal_pose", &input_data_map.at("goal_pose")},
     {"ego_shape", &input_data_map.at("ego_shape")},
     {"turn_indicators", &input_data_map.at("turn_indicators")},
-    {"delay", &input_data_map.at("delay")}};
+    {"lane_traffic_light_past", &input_data_map.at("lane_traffic_light_past")},
+    {"route_traffic_light_past", &input_data_map.at("route_traffic_light_past")}};
 }
 
 std::vector<FloatInput> encoder_float_inputs(const preprocess::InputDataMap & input_data_map)
@@ -114,16 +117,22 @@ std::vector<FloatInput> encoder_float_inputs(const preprocess::InputDataMap & in
   return {
     {"ego_agent_past", &input_data_map.at("ego_agent_past")},
     {"neighbor_agents_past", &input_data_map.at("neighbor_agents_past")},
-    {"static_objects", &input_data_map.at("static_objects")},
+    {"agent_shape", &input_data_map.at("agent_shape")},
+    {"agent_label", &input_data_map.at("agent_label")},
     {"lanes", &input_data_map.at("lanes")},
+    {"lane_types", &input_data_map.at("lane_types")},
     {"lanes_speed_limit", &input_data_map.at("lanes_speed_limit")},
     {"route_lanes", &input_data_map.at("route_lanes")},
+    {"route_lane_types", &input_data_map.at("route_lane_types")},
     {"route_lanes_speed_limit", &input_data_map.at("route_lanes_speed_limit")},
-    {"polygons", &input_data_map.at("polygons")},
-    {"line_strings", &input_data_map.at("line_strings")},
+    {"intersection_area", &input_data_map.at("intersection_area")},
+    {"stop_lines", &input_data_map.at("stop_lines")},
+    {"road_borders", &input_data_map.at("road_borders")},
     {"goal_pose", &input_data_map.at("goal_pose")},
     {"ego_shape", &input_data_map.at("ego_shape")},
-    {"turn_indicators", &input_data_map.at("turn_indicators")}};
+    {"turn_indicators", &input_data_map.at("turn_indicators")},
+    {"lane_traffic_light_past", &input_data_map.at("lane_traffic_light_past")},
+    {"route_traffic_light_past", &input_data_map.at("route_traffic_light_past")}};
 }
 
 std::unordered_map<std::string, std::vector<uint8_t>> speed_limit_bool_inputs(
@@ -139,7 +148,7 @@ std::unordered_map<std::string, std::vector<float>> to_float_input_map(
 {
   std::unordered_map<std::string, std::vector<float>> map;
   for (const auto & input : inputs) {
-    map.emplace(input.name, *input.data);
+    map.emplace(input.name, std::vector<float>(input.data->cbegin(), input.data->cend()));
   }
   return map;
 }
@@ -204,9 +213,8 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
     }
     input_names.push_back(name);
     input_name_ptrs.push_back(input_names.back().c_str());
-    input_tensors.push_back(
-      Ort::Value::CreateTensor<float>(
-        memory_info_, const_cast<float *>(data.data()), data.size(), shape.data(), shape.size()));
+    input_tensors.push_back(Ort::Value::CreateTensor<float>(
+      memory_info_, const_cast<float *>(data.data()), data.size(), shape.data(), shape.size()));
   };
 
   const auto add_bool_tensor = [&](
@@ -217,10 +225,9 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
     }
     input_names.push_back(name);
     input_name_ptrs.push_back(input_names.back().c_str());
-    input_tensors.push_back(
-      Ort::Value::CreateTensor(
-        memory_info_, const_cast<uint8_t *>(data.data()), data.size() * sizeof(uint8_t),
-        shape.data(), shape.size(), ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL));
+    input_tensors.push_back(Ort::Value::CreateTensor(
+      memory_info_, const_cast<uint8_t *>(data.data()), data.size() * sizeof(uint8_t), shape.data(),
+      shape.size(), ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL));
   };
 
   for (const auto & [name, data] : float_inputs) {
@@ -232,18 +239,21 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
     } else if (name == "ego_agent_past") {
       add_float_tensor(
         name, data,
-        {static_cast<int64_t>(data.size() / ((INPUT_T + 1) * POSE_DIM)), INPUT_T + 1, POSE_DIM});
-    } else if (name == "ego_current_state") {
-      add_float_tensor(name, data, {static_cast<int64_t>(data.size() / 10), 10});
+        {static_cast<int64_t>(data.size() / ((INPUT_T + 1) * EGO_HISTORY_DIM)), INPUT_T + 1,
+         EGO_HISTORY_DIM});
     } else if (name == "neighbor_agents_past") {
       add_float_tensor(
         name, data,
-        {static_cast<int64_t>(data.size() / (MAX_NUM_NEIGHBORS * (INPUT_T + 1) * 11)),
-         MAX_NUM_NEIGHBORS, INPUT_T + 1, 11});
-    } else if (name == "static_objects") {
+        {static_cast<int64_t>(data.size() / (MAX_NUM_NEIGHBORS * (INPUT_T + 1) * POSE_DIM)),
+         MAX_NUM_NEIGHBORS, INPUT_T + 1, POSE_DIM});
+    } else if (name == "agent_shape") {
       add_float_tensor(
         name, data,
-        {static_cast<int64_t>(data.size() / (NUM_STATIC_OBJECTS * 10)), NUM_STATIC_OBJECTS, 10});
+        {static_cast<int64_t>(data.size() / (MAX_NUM_NEIGHBORS * 2)), MAX_NUM_NEIGHBORS, 2});
+    } else if (name == "agent_label") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(data.size() / (MAX_NUM_NEIGHBORS * 3)), MAX_NUM_NEIGHBORS, 3});
     } else if (name == "lanes") {
       add_float_tensor(
         name, data,
@@ -254,6 +264,11 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
       add_float_tensor(
         name, data,
         {static_cast<int64_t>(data.size() / NUM_SEGMENTS_IN_LANE), NUM_SEGMENTS_IN_LANE, 1});
+    } else if (name == "lane_types") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(data.size() / (NUM_SEGMENTS_IN_LANE * LANE_TYPE_DIM)),
+         NUM_SEGMENTS_IN_LANE, LANE_TYPE_DIM});
     } else if (name == "route_lanes") {
       add_float_tensor(
         name, data,
@@ -264,18 +279,27 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
       add_float_tensor(
         name, data,
         {static_cast<int64_t>(data.size() / NUM_SEGMENTS_IN_ROUTE), NUM_SEGMENTS_IN_ROUTE, 1});
-    } else if (name == "polygons") {
+    } else if (name == "route_lane_types") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(data.size() / (NUM_SEGMENTS_IN_ROUTE * LANE_TYPE_DIM)),
+         NUM_SEGMENTS_IN_ROUTE, LANE_TYPE_DIM});
+    } else if (name == "intersection_area") {
       add_float_tensor(
         name, data,
         {static_cast<int64_t>(
-           data.size() / (NUM_POLYGONS * POINTS_PER_POLYGON * (2 + POLYGON_TYPE_NUM))),
-         NUM_POLYGONS, POINTS_PER_POLYGON, 2 + POLYGON_TYPE_NUM});
-    } else if (name == "line_strings") {
+           data.size() / (NUM_INTERSECTION_AREAS * POINTS_PER_INTERSECTION_AREA * 2)),
+         NUM_INTERSECTION_AREAS, POINTS_PER_INTERSECTION_AREA, 2});
+    } else if (name == "stop_lines") {
       add_float_tensor(
         name, data,
-        {static_cast<int64_t>(
-           data.size() / (NUM_LINE_STRINGS * POINTS_PER_LINE_STRING * (2 + LINE_STRING_TYPE_NUM))),
-         NUM_LINE_STRINGS, POINTS_PER_LINE_STRING, 2 + LINE_STRING_TYPE_NUM});
+        {static_cast<int64_t>(data.size() / (NUM_STOP_LINES * POINTS_PER_STOP_LINE * 2)),
+         NUM_STOP_LINES, POINTS_PER_STOP_LINE, 2});
+    } else if (name == "road_borders") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(data.size() / (NUM_ROAD_BORDERS * POINTS_PER_ROAD_BORDER * 2)),
+         NUM_ROAD_BORDERS, POINTS_PER_ROAD_BORDER, 2});
     } else if (name == "goal_pose") {
       add_float_tensor(name, data, {static_cast<int64_t>(data.size() / POSE_DIM), POSE_DIM});
     } else if (name == "ego_shape") {
@@ -283,8 +307,18 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
     } else if (name == "turn_indicators") {
       add_float_tensor(
         name, data, {static_cast<int64_t>(data.size() / (INPUT_T + 1)), INPUT_T + 1});
-    } else if (name == "delay") {
-      add_float_tensor(name, data, {static_cast<int64_t>(data.size()), 1});
+    } else if (name == "lane_traffic_light_past") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(
+           data.size() / (NUM_SEGMENTS_IN_LANE * (INPUT_T + 1) * TRAFFIC_LIGHT_ONE_HOT_DIM)),
+         NUM_SEGMENTS_IN_LANE, INPUT_T + 1, TRAFFIC_LIGHT_ONE_HOT_DIM});
+    } else if (name == "route_traffic_light_past") {
+      add_float_tensor(
+        name, data,
+        {static_cast<int64_t>(
+           data.size() / (NUM_SEGMENTS_IN_ROUTE * (INPUT_T + 1) * TRAFFIC_LIGHT_ONE_HOT_DIM)),
+         NUM_SEGMENTS_IN_ROUTE, INPUT_T + 1, TRAFFIC_LIGHT_ONE_HOT_DIM});
     } else if (name == "encoding") {
       add_float_tensor(
         name, data,
@@ -391,20 +425,19 @@ std::vector<float> OnnxruntimeMultiStepInference::create_diffusion_time(float t)
 std::vector<float> OnnxruntimeMultiStepInference::create_current_states(
   const preprocess::InputDataMap & input_data_map) const
 {
-  const auto & ego_current_state = input_data_map.at("ego_current_state");
+  const auto & ego_history = input_data_map.at("ego_agent_past");
   const auto & neighbor_agents_past = input_data_map.at("neighbor_agents_past");
 
   std::vector<float> current_states(batch_size_ * MAX_NUM_AGENTS * POSE_DIM, 0.0f);
   for (int b = 0; b < batch_size_; ++b) {
     for (int64_t d = 0; d < POSE_DIM; ++d) {
-      current_states[(b * MAX_NUM_AGENTS * POSE_DIM) + d] =
-        ego_current_state[b * EGO_CURRENT_STATE_SHAPE[1] + d];
+      current_states[(b * MAX_NUM_AGENTS * POSE_DIM) + d] = ego_history(b, INPUT_T, d);
     }
     for (int64_t agent = 1; agent < MAX_NUM_AGENTS; ++agent) {
       for (int64_t d = 0; d < POSE_DIM; ++d) {
         const size_t neighbor_idx =
           (((static_cast<size_t>(b) * MAX_NUM_NEIGHBORS + (agent - 1)) * (INPUT_T + 1) + INPUT_T) *
-           11) +
+           POSE_DIM) +
           d;
         const size_t current_idx = (static_cast<size_t>(b) * MAX_NUM_AGENTS + agent) * POSE_DIM + d;
         current_states[current_idx] = neighbor_agents_past[neighbor_idx];
@@ -437,7 +470,9 @@ std::vector<float> OnnxruntimeMultiStepInference::evaluate_decoder(
     {{"encoding", encoding_},
      {"sampled_trajectories", x},
      {"diffusion_time", diffusion_time},
-     {"neighbor_agents_past", decoder_neighbor_agents_past_}},
+     {"neighbor_agents_past", decoder_neighbor_agents_past_},
+     {"agent_shape", decoder_agent_shape_},
+     {"agent_label", decoder_agent_label_}},
     {}, {"model_output"});
   return outputs.at("model_output");
 }
@@ -446,7 +481,12 @@ DpmSolver::SampleResult OnnxruntimeMultiStepInference::run_dpm_solver(
   const preprocess::InputDataMap & input_data_map)
 {
   const std::vector<float> current_states = create_current_states(input_data_map);
-  decoder_neighbor_agents_past_ = input_data_map.at("neighbor_agents_past");
+  const auto & neighbor_agents_past = input_data_map.at("neighbor_agents_past");
+  decoder_neighbor_agents_past_.assign(neighbor_agents_past.cbegin(), neighbor_agents_past.cend());
+  const auto & agent_shape = input_data_map.at("agent_shape");
+  decoder_agent_shape_.assign(agent_shape.cbegin(), agent_shape.cend());
+  const auto & agent_label = input_data_map.at("agent_label");
+  decoder_agent_label_.assign(agent_label.cbegin(), agent_label.cend());
   const auto model_fn = [this](const std::vector<float> & x, float timestep) {
     return evaluate_decoder(x, timestep);
   };
@@ -455,8 +495,10 @@ DpmSolver::SampleResult OnnxruntimeMultiStepInference::run_dpm_solver(
   };
 
   const DpmSolver solver(dpm_solver_steps_);
+  const auto & sampled_trajectories = input_data_map.at("sampled_trajectories");
   return solver.sample(
-    input_data_map.at("sampled_trajectories"), model_fn, correcting_fn, guidances_);
+    std::vector<float>(sampled_trajectories.cbegin(), sampled_trajectories.cend()), model_fn,
+    correcting_fn, guidances_);
 }
 
 InferenceResult OnnxruntimeMultiStepInference::infer(

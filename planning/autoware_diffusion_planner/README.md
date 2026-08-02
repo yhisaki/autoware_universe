@@ -79,7 +79,6 @@ Parameters can be set via YAML (see `config/diffusion_planner.param.yaml`).
 | Topic                     | Message Type                                        | Description                |
 | ------------------------- | --------------------------------------------------- | -------------------------- |
 | `~/input/odometry`        | nav_msgs/msg/Odometry                               | Ego vehicle odometry       |
-| `~/input/acceleration`    | geometry_msgs/msg/AccelWithCovarianceStamped        | Ego acceleration           |
 | `~/input/tracked_objects` | autoware_perception_msgs/msg/TrackedObjects         | Detected dynamic objects   |
 | `~/input/traffic_signals` | autoware_perception_msgs/msg/TrafficLightGroupArray | Traffic light states       |
 | `~/input/vector_map`      | autoware_map_msgs/msg/LaneletMapBin                 | Lanelet2 map               |

@@ -9,7 +9,6 @@
   <arg name="output_turn_indicators" default="~/output/turn_indicators"/>
   <arg name="debug/output_traffic_signal" default="~/output/debug/traffic_signal"/>
   <arg name="input_odometry" default="~/input/odometry"/>
-  <arg name="input_acceleration" default="~/input/acceleration"/>
   <arg name="input_route" default="~/input/route"/>
   <arg name="input_traffic_signals" default="~/input/traffic_signals"/>
   <arg name="input_tracked_objects" default="~/input/tracked_objects"/>
@@ -26,7 +25,6 @@
     <remap from="~/output/turn_indicators" to="$(var output_turn_indicators)"/>
     <remap from="~/output/debug/traffic_signal" to="$(var debug/output_traffic_signal)"/>
     <remap from="~/input/odometry" to="$(var input_odometry)"/>
-    <remap from="~/input/acceleration" to="$(var input_acceleration)"/>
     <remap from="~/input/route" to="$(var input_route)"/>
     <remap from="~/input/traffic_signals" to="$(var input_traffic_signals)"/>
     <remap from="~/input/tracked_objects" to="$(var input_tracked_objects)"/>

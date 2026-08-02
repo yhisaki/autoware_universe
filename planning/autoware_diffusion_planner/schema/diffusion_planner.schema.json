@@ -102,11 +102,6 @@
           "exclusiveMinimum": 0,
           "description": "Planning frequency in Hz"
         },
-        "ignore_neighbors": {
-          "type": "boolean",
-          "default": false,
-          "description": "Ignore neighbor agents"
-        },
         "traffic_light_group_msg_timeout_seconds": {
           "type": "number",
           "default": 0.2,
@@ -133,12 +128,6 @@
           "default": [0.0],
           "description": "List of temperature for sampling trajectories. Its length must be the same as `batch_size`. Each value means the coefficient of the standard normal distribution which is used for each initial noise of corresponding batch index. val = N(0,1) * temperature"
         },
-        "velocity_smoothing_window": {
-          "type": "integer",
-          "default": 8,
-          "minimum": 1,
-          "description": "Window size for velocity smoothing. Set to 1 to disable smoothing."
-        },
         "stopping_threshold": {
           "type": "number",
           "default": 0.3,
@@ -154,27 +143,11 @@
           "default": 1.0,
           "description": "Duration to hold the turn indicator command before allowing changes (seconds)"
         },
-        "shift_x": {
-          "type": "boolean",
-          "default": false,
-          "description": "Whether to shift the ego center position by half the wheel base"
-        },
-        "delay_step": {
-          "type": "integer",
-          "default": 0,
-          "minimum": 0,
-          "description": "Input delay step for inference"
-        },
         "line_string_max_step_m": {
           "type": "number",
           "default": 5.0,
           "exclusiveMinimum": 0,
           "description": "Maximum arc-length step per model point when resampling line strings [m]. Smaller values produce more fixed-size sub-segments per line string."
-        },
-        "use_time_interpolation": {
-          "type": "boolean",
-          "default": false,
-          "description": "Whether to interpolate ego past trajectory at regular time intervals"
         },
         "guidance": {
           "type": "object",
@@ -289,7 +262,6 @@
         "traffic_light_group_msg_timeout_seconds",
         "batch_size",
         "temperature",
-        "velocity_smoothing_window",
         "stopping_threshold",
         "turn_indicator_keep_offset",
         "turn_indicator_hold_duration",

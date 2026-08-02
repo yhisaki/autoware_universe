@@ -20,6 +20,7 @@
 #include "autoware/diffusion_planner/utils/marker_utils.hpp"
 #include "autoware/diffusion_planner/utils/utils.hpp"
 
+#include <autoware_utils_uuid/uuid_helper.hpp>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/logging.hpp>
 
@@ -35,6 +36,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace autoware::diffusion_planner
@@ -183,22 +185,16 @@ void DiffusionPlanner::set_up_params()
   params_.plugins_path = this->declare_parameter<std::string>("plugins_path", "");
   params_.build_only = this->declare_parameter<bool>("build_only", false);
   params_.planning_frequency_hz = this->declare_parameter<double>("planning_frequency_hz", 10.0);
-  params_.ignore_neighbors = this->declare_parameter<bool>("ignore_neighbors", false);
   params_.traffic_light_group_msg_timeout_seconds =
     this->declare_parameter<double>("traffic_light_group_msg_timeout_seconds", 0.2);
   params_.batch_size = this->declare_parameter<int>("batch_size", 1);
   params_.temperature_list = this->declare_parameter<std::vector<double>>("temperature", {0.0});
-  params_.velocity_smoothing_window =
-    this->declare_parameter<int64_t>("velocity_smoothing_window", 8);
   params_.stopping_threshold = this->declare_parameter<double>("stopping_threshold", 0.3);
   params_.turn_indicator_keep_offset =
     this->declare_parameter<float>("turn_indicator_keep_offset", -1.25f);
   params_.turn_indicator_hold_duration =
     this->declare_parameter<double>("turn_indicator_hold_duration", 0.0);
-  params_.shift_x = this->declare_parameter<bool>("shift_x", false);
-  params_.delay_step = this->declare_parameter<int64_t>("delay_step", 0);
   params_.line_string_max_step_m = this->declare_parameter<double>("line_string_max_step_m", 5.0);
-  params_.use_time_interpolation = this->declare_parameter<bool>("use_time_interpolation", false);
   params_.start_guidance_reference_distance_m =
     this->declare_parameter<double>("guidance.start_guidance.reference_distance_m", 10.0);
   params_.start_guidance_max_scale =
@@ -295,23 +291,17 @@ SetParametersResult DiffusionPlanner::on_parameter(
     update_param<std::string>(parameters, "model.backend", temp_params.backend);
     update_param<std::string>(parameters, "model.precision", temp_params.trt_precision);
     update_param<bool>(parameters, "model.use_cuda_graph", temp_params.use_cuda_graph);
-    update_param<bool>(parameters, "ignore_neighbors", temp_params.ignore_neighbors);
     update_param<double>(
       parameters, "traffic_light_group_msg_timeout_seconds",
       temp_params.traffic_light_group_msg_timeout_seconds);
     update_param<int>(parameters, "batch_size", temp_params.batch_size);
     update_param<std::vector<double>>(parameters, "temperature", temp_params.temperature_list);
-    update_param<int64_t>(
-      parameters, "velocity_smoothing_window", temp_params.velocity_smoothing_window);
     update_param<double>(parameters, "stopping_threshold", temp_params.stopping_threshold);
     update_param<float>(
       parameters, "turn_indicator_keep_offset", temp_params.turn_indicator_keep_offset);
     update_param<double>(
       parameters, "turn_indicator_hold_duration", temp_params.turn_indicator_hold_duration);
-    update_param<bool>(parameters, "shift_x", temp_params.shift_x);
-    update_param<int64_t>(parameters, "delay_step", temp_params.delay_step);
     update_param<double>(parameters, "line_string_max_step_m", temp_params.line_string_max_step_m);
-    update_param<bool>(parameters, "use_time_interpolation", temp_params.use_time_interpolation);
     update_param<double>(
       parameters, "guidance.start_guidance.reference_distance_m",
       temp_params.start_guidance_reference_distance_m);
@@ -429,10 +419,9 @@ void DiffusionPlanner::on_set_centerline_guidance_enabled(
     request->data ? "Centerline guidance enabled" : "Centerline guidance disabled";
 }
 
-void DiffusionPlanner::publish_first_traffic_light_on_route(
-  const FrameContext & frame_context) const
+void DiffusionPlanner::publish_first_traffic_light_on_route() const
 {
-  const auto msg = core_->get_first_traffic_light_on_route(frame_context);
+  const auto msg = core_->get_first_traffic_light_on_route();
   pub_traffic_signal_->publish(msg);
 }
 
@@ -445,7 +434,7 @@ void DiffusionPlanner::publish_debug_markers(
     auto route_markers = utils::create_lane_marker(
       ego_to_map_transform, input_data_map.at("route_lanes"),
       std::vector<int64_t>(ROUTE_LANES_SHAPE.begin(), ROUTE_LANES_SHAPE.end()), timestamp, lifetime,
-      {0.8, 0.8, 0.8, 0.8}, "map", true);
+      {0.8, 0.8, 0.8, 0.8}, "map");
     pub_route_marker_->publish(route_markers);
   }
 
@@ -454,17 +443,24 @@ void DiffusionPlanner::publish_debug_markers(
     auto lane_markers = utils::create_lane_marker(
       ego_to_map_transform, input_data_map.at("lanes"),
       std::vector<int64_t>(LANES_SHAPE.begin(), LANES_SHAPE.end()), timestamp, lifetime,
-      {0.1, 0.1, 0.7, 0.8}, "map", true);
+      {0.1, 0.1, 0.7, 0.8}, "map");
     pub_lane_marker_->publish(lane_markers);
   }
 
   if (debug_params_.publish_debug_linestrings) {
     auto lifetime = rclcpp::Duration::from_seconds(0.2);
-    auto linestring_markers = utils::create_linestring_marker(
-      ego_to_map_transform, input_data_map.at("line_strings"),
-      std::vector<int64_t>(LINE_STRINGS_SHAPE.begin(), LINE_STRINGS_SHAPE.end()), timestamp,
-      lifetime, "map");
-    pub_linestring_marker_->publish(linestring_markers);
+    auto map_markers = utils::create_map_polyline_marker(
+      ego_to_map_transform, input_data_map.at("stop_lines"),
+      std::vector<int64_t>(STOP_LINES_SHAPE.begin(), STOP_LINES_SHAPE.end()), timestamp, lifetime,
+      {1.0f, 0.65f, 0.0f, 0.8f}, "stop_line", "map");
+    auto road_border_markers = utils::create_map_polyline_marker(
+      ego_to_map_transform, input_data_map.at("road_borders"),
+      std::vector<int64_t>(ROAD_BORDERS_SHAPE.begin(), ROAD_BORDERS_SHAPE.end()), timestamp,
+      lifetime, {0.8f, 0.0f, 0.2f, 0.8f}, "road_border", "map");
+    map_markers.markers.insert(
+      map_markers.markers.end(), road_border_markers.markers.begin(),
+      road_border_markers.markers.end());
+    pub_linestring_marker_->publish(map_markers);
   }
 }
 
@@ -499,31 +495,9 @@ void DiffusionPlanner::on_timer()
   // Take data from subscribers
   auto objects = sub_tracked_objects_.take_data();
   auto ego_kinematic_state = sub_current_odometry_.take_data();
-  auto ego_acceleration = sub_current_acceleration_.take_data();
   auto traffic_signals = sub_traffic_signals_.take_data();
   auto temp_route_ptr = route_subscriber_.take_data();
   auto turn_indicators_ptr = sub_turn_indicators_.take_data();
-
-  // Prepare frame context using core
-  const std::optional<FrameContext> frame_context = core_->create_frame_context(
-    ego_kinematic_state, ego_acceleration, objects, traffic_signals, turn_indicators_ptr,
-    temp_route_ptr, this->now());
-
-  if (!frame_context) {
-    // Log detailed information about missing inputs
-    RCLCPP_WARN_STREAM_THROTTLE(
-      get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
-      "There is no input data. objects: "
-        << (objects ? "true" : "false")
-        << ", ego_kinematic_state: " << (ego_kinematic_state ? "true" : "false")
-        << ", ego_acceleration: " << (ego_acceleration ? "true" : "false")
-        << ", route: " << (core_->get_route() ? "true" : "false")
-        << ", turn_indicators: " << (turn_indicators_ptr ? "true" : "false"));
-    diagnostics_inference_->update_level_and_message(
-      DiagnosticStatus::WARN, "No input data available for inference");
-    diagnostics_inference_->publish(current_time);
-    return;
-  }
 
   if (traffic_signals.empty()) {
     RCLCPP_WARN_THROTTLE(
@@ -531,12 +505,25 @@ void DiffusionPlanner::on_timer()
       "no traffic signal received. traffic light info will not be updated");
   }
 
-  const rclcpp::Time frame_time(frame_context->frame_time);
-  InputDataMap input_data_map = core_->create_input_data(*frame_context);
+  auto input_data_result = core_->create_input_data(
+    ego_kinematic_state, objects, traffic_signals, turn_indicators_ptr, temp_route_ptr);
+  if (!input_data_result) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
+      "Failed to create input data: %s", input_data_result.error().c_str());
+    diagnostics_inference_->update_level_and_message(
+      DiagnosticStatus::WARN, input_data_result.error());
+    diagnostics_inference_->publish(current_time);
+    return;
+  }
+  InputDataMap input_data_map = std::move(input_data_result.value());
+  const rclcpp::Time frame_time = core_->frame_time();
 
-  publish_debug_markers(input_data_map, frame_context->ego_to_map_transform, frame_time);
+  const Eigen::Matrix4d ego_to_map_transform =
+    utils::pose_to_matrix4d(ego_kinematic_state->pose.pose);
+  publish_debug_markers(input_data_map, ego_to_map_transform, frame_time);
 
-  publish_first_traffic_light_on_route(*frame_context);
+  publish_first_traffic_light_on_route();
 
   // Calculate and record metrics for diagnostics using core
   diagnostics_inference_->add_key_value(
@@ -544,9 +531,12 @@ void DiffusionPlanner::on_timer()
   diagnostics_inference_->add_key_value(
     "valid_route_count", core_->count_valid_elements(input_data_map, "route_lanes"));
   diagnostics_inference_->add_key_value(
-    "valid_polygon_count", core_->count_valid_elements(input_data_map, "polygons"));
+    "valid_intersection_area_count",
+    core_->count_valid_elements(input_data_map, "intersection_area"));
   diagnostics_inference_->add_key_value(
-    "valid_line_string_count", core_->count_valid_elements(input_data_map, "line_strings"));
+    "valid_stop_line_count", core_->count_valid_elements(input_data_map, "stop_lines"));
+  diagnostics_inference_->add_key_value(
+    "valid_road_border_count", core_->count_valid_elements(input_data_map, "road_borders"));
   diagnostics_inference_->add_key_value(
     "valid_neighbor_count", core_->count_valid_elements(input_data_map, "neighbor_agents_past"));
 
@@ -581,8 +571,7 @@ void DiffusionPlanner::on_timer()
 
   PlannerOutput planner_output;
   try {
-    planner_output =
-      core_->create_planner_output(*inference_result, *frame_context, frame_time, generator_uuid_);
+    planner_output = core_->create_planner_output(*inference_result, frame_time, generator_uuid_);
   } catch (const std::exception & e) {
     RCLCPP_ERROR_STREAM(get_logger(), "Postprocessing failed: " << e.what());
     diagnostics_inference_->update_level_and_message(DiagnosticStatus::ERROR, e.what());

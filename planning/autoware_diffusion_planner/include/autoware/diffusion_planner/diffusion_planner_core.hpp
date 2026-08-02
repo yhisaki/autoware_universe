@@ -15,19 +15,22 @@
 #ifndef AUTOWARE__DIFFUSION_PLANNER__DIFFUSION_PLANNER_CORE_HPP_
 #define AUTOWARE__DIFFUSION_PLANNER__DIFFUSION_PLANNER_CORE_HPP_
 
-#include "autoware/diffusion_planner/conversion/agent.hpp"
+#include "autoware/diffusion_planner/dimensions.hpp"
 #include "autoware/diffusion_planner/inference/guidance/centerline_guidance.hpp"
 #include "autoware/diffusion_planner/inference/guidance/start_guidance.hpp"
 #include "autoware/diffusion_planner/inference/guidance/stop_guidance.hpp"
 #include "autoware/diffusion_planner/inference/inference.hpp"
 #include "autoware/diffusion_planner/postprocessing/turn_indicator_manager.hpp"
-#include "autoware/diffusion_planner/preprocessing/lane_segments.hpp"
-#include "autoware/diffusion_planner/preprocessing/traffic_signals.hpp"
+#include "autoware/diffusion_planner/preprocessing/input_builder.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/map.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/traffic_signals.hpp"
 #include "autoware/diffusion_planner/utils/arg_reader.hpp"
+#include "autoware/diffusion_planner/utils/timed_buffer.hpp"
 
 #include <Eigen/Dense>
 #include <autoware/vehicle_info_utils/vehicle_info.hpp>
 #include <rclcpp/time.hpp>
+#include <xtensor/xarray.hpp>
 
 #include <autoware_internal_planning_msgs/msg/candidate_trajectories.hpp>
 #include <autoware_perception_msgs/msg/predicted_objects.hpp>
@@ -36,17 +39,13 @@
 #include <autoware_planning_msgs/msg/lanelet_route.hpp>
 #include <autoware_planning_msgs/msg/trajectory.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_report.hpp>
-#include <geometry_msgs/msg/accel_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <unique_identifier_msgs/msg/uuid.hpp>
 
 #include <lanelet2_core/LaneletMap.h>
 
-#include <deque>
-#include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,7 +53,6 @@
 namespace autoware::diffusion_planner
 {
 
-using autoware::diffusion_planner::AgentData;
 using autoware::vehicle_info_utils::VehicleInfo;
 using autoware_internal_planning_msgs::msg::CandidateTrajectories;
 using autoware_perception_msgs::msg::PredictedObjects;
@@ -63,31 +61,12 @@ using autoware_planning_msgs::msg::LaneletRoute;
 using autoware_planning_msgs::msg::Trajectory;
 using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using autoware_vehicle_msgs::msg::TurnIndicatorsReport;
-using geometry_msgs::msg::AccelWithCovarianceStamped;
 using nav_msgs::msg::Odometry;
-using preprocess::TrafficSignalStamped;
 using std_msgs::msg::Float32MultiArray;
 using unique_identifier_msgs::msg::UUID;
 using utils::ObservationNormalization;
 using utils::StateNormalization;
-using InputDataMap = std::unordered_map<std::string, std::vector<float>>;
-using AgentPoses = std::vector<std::vector<std::vector<Eigen::Matrix4d>>>;
-
-struct VehicleSpec
-{
-  double wheel_base;
-  double vehicle_length;
-  double vehicle_width;
-  double base_link_to_center;
-
-  explicit VehicleSpec(const VehicleInfo & info)
-  : wheel_base(info.wheel_base_m),
-    vehicle_length(info.front_overhang_m + info.wheel_base_m + info.rear_overhang_m),
-    vehicle_width(info.left_overhang_m + info.wheel_tread_m + info.right_overhang_m),
-    base_link_to_center((info.front_overhang_m + info.wheel_base_m - info.rear_overhang_m) / 2.0)
-  {
-  }
-};
+using InputDataMap = std::unordered_map<std::string, xt::xarray<float>>;
 
 struct PlannerOutput
 {
@@ -97,15 +76,6 @@ struct PlannerOutput
   TurnIndicatorsCommand turn_indicators_command;
   Float32MultiArray denoising_steps;
   std::unordered_map<std::string, std::vector<bool>> guidance_triggered;
-};
-
-struct FrameContext
-{
-  nav_msgs::msg::Odometry ego_kinematic_state;
-  geometry_msgs::msg::AccelWithCovarianceStamped ego_acceleration;
-  Eigen::Matrix4d ego_to_map_transform;
-  std::vector<AgentHistory> ego_centric_neighbor_histories;
-  rclcpp::Time frame_time;
 };
 
 struct DiffusionPlannerParams
@@ -122,18 +92,13 @@ struct DiffusionPlannerParams
   bool use_cuda_graph;
   bool build_only;
   double planning_frequency_hz;
-  bool ignore_neighbors;
   double traffic_light_group_msg_timeout_seconds;
   int batch_size;
   std::vector<double> temperature_list;
-  int64_t velocity_smoothing_window;
   double stopping_threshold;
   float turn_indicator_keep_offset;
   double turn_indicator_hold_duration;
-  bool shift_x;
-  int64_t delay_step;
   double line_string_max_step_m;
-  bool use_time_interpolation;
   int dpm_solver_steps;
   double start_guidance_reference_distance_m;
   double start_guidance_max_scale;
@@ -179,34 +144,25 @@ public:
   void update_params(const DiffusionPlannerParams & params);
 
   /**
-   * @brief Prepare frame context for inference.
+   * @brief Reference time of the current frame (stamp of the newest ego odometry).
    *
-   * @param ego_kinematic_state Current ego vehicle odometry
-   * @param ego_acceleration Current ego vehicle acceleration
-   * @param objects Tracked objects in the scene
-   * @param traffic_signals Traffic signal information
-   * @param turn_indicators Current turn indicator state
-   * @param route_ptr Route information
-   * @param current_time Current timestamp
-   * @return FrameContext containing preprocessed data, or nullopt if data is incomplete
+   * Only valid after create_input_data() succeeds.
    */
-  std::optional<FrameContext> create_frame_context(
+  rclcpp::Time frame_time() const;
+
+  /**
+   * @brief Build model input tensors from the raw message buffers.
+   *
+   * @return Input tensors, or an error describing why they could not be built
+   */
+  preprocess::InputDataResult create_input_data(
     const std::shared_ptr<const Odometry> & ego_kinematic_state,
-    const std::shared_ptr<const AccelWithCovarianceStamped> & ego_acceleration,
     const std::shared_ptr<const TrackedObjects> & objects,
     const std::vector<
       std::shared_ptr<const autoware_perception_msgs::msg::TrafficLightGroupArray>> &
       traffic_signals,
     const std::shared_ptr<const TurnIndicatorsReport> & turn_indicators,
-    const LaneletRoute::ConstSharedPtr & route_ptr, const rclcpp::Time & current_time);
-
-  /**
-   * @brief Build model input tensors from frame context.
-   *
-   * @param frame_context Preprocessed frame context
-   * @return Map of input data for the model
-   */
-  InputDataMap create_input_data(const FrameContext & frame_context);
+    const LaneletRoute::ConstSharedPtr & route_ptr);
 
   /**
    * @brief Set the lanelet map context.
@@ -275,29 +231,26 @@ public:
    * for all batches, predicted objects for neighbor agents, and turn indicator command.
    *
    * @param inference_output Successful inference output.
-   * @param frame_context Context of the current frame.
    * @param timestamp The ROS time stamp for the messages.
    * @param generator_uuid The unique identifier for the planner instance.
    * @return PlannerOutput containing all output messages.
    */
   PlannerOutput create_planner_output(
-    const InferenceOutput & inference_output, const FrameContext & frame_context,
-    const rclcpp::Time & timestamp, const UUID & generator_uuid);
+    const InferenceOutput & inference_output, const rclcpp::Time & timestamp,
+    const UUID & generator_uuid);
 
   /**
    * @brief Get the first traffic light on the route for debugging.
    *
-   * @param frame_context Context of the current frame
    * @return Traffic light group message
    */
-  autoware_perception_msgs::msg::TrafficLightGroup get_first_traffic_light_on_route(
-    const FrameContext & frame_context) const;
+  autoware_perception_msgs::msg::TrafficLightGroup get_first_traffic_light_on_route() const;
 
   /**
    * @brief Count valid elements in input data for diagnostics.
    *
    * @param input_data_map Input data map
-   * @param data_key Key for the data to count (e.g., "lanes", "route_lanes", "polygons")
+   * @param data_key Key to count (e.g., "lanes", "route_lanes", "intersection_area")
    * @return Count of valid elements
    */
   int64_t count_valid_elements(
@@ -329,6 +282,7 @@ private:
 
   // Postprocessing
   std::vector<postprocess::TurnIndicatorManager> turn_indicator_managers_;
+  std::vector<preprocess::SelectedAgent> selected_agents_;
 
   /**
    * @brief Resize the per-trajectory turn indicator managers to the current batch size and
@@ -336,12 +290,29 @@ private:
    */
   void sync_turn_indicator_managers();
 
-  // History data
-  std::deque<nav_msgs::msg::Odometry> ego_history_;
-  std::deque<TurnIndicatorsReport> turn_indicators_history_;
-  AgentData agent_data_;
-  std::map<lanelet::Id, TrafficSignalStamped> traffic_light_id_map_;
-  std::vector<std::vector<std::vector<Eigen::Matrix4d>>> last_agent_poses_map_;
+  /**
+   * @brief Store validated frame inputs in the history buffers.
+   */
+  void update_buffers(
+    const Odometry & ego_kinematic_state, const TrackedObjects & objects,
+    const std::vector<
+      std::shared_ptr<const autoware_perception_msgs::msg::TrafficLightGroupArray>> &
+      traffic_signals,
+    const TurnIndicatorsReport & turn_indicators, const LaneletRoute::ConstSharedPtr & route_ptr);
+
+  // Raw message history buffers, bounded to the model input time window.
+  // All derived history data is computed statelessly from these buffers.
+  utils::TimedBuffer<Odometry> ego_history_{
+    HISTORY_WINDOW_S, [](const Odometry & msg) { return rclcpp::Time(msg.header.stamp); }};
+  utils::TimedBuffer<TurnIndicatorsReport> turn_indicators_history_{
+    HISTORY_WINDOW_S, [](const TurnIndicatorsReport & msg) { return rclcpp::Time(msg.stamp); }};
+  utils::TimedBuffer<TrackedObjects> objects_history_{
+    HISTORY_WINDOW_S, [](const TrackedObjects & msg) { return rclcpp::Time(msg.header.stamp); }};
+  utils::TimedBuffer<autoware_perception_msgs::msg::TrafficLightGroupArray>
+    traffic_signals_history_{
+      HISTORY_WINDOW_S, [](const autoware_perception_msgs::msg::TrafficLightGroupArray & msg) {
+        return rclcpp::Time(msg.stamp);
+      }};
 
   // Lanelet map
   LaneletRoute::ConstSharedPtr route_ptr_;

@@ -62,7 +62,7 @@ struct LanePointData
 };
 
 LanePointData extract_lane_point(
-  const std::vector<float> & lane_vector, int64_t l, int64_t p, int64_t P, int64_t D)
+  const xt::xarray<float> & lane_vector, int64_t l, int64_t p, int64_t P, int64_t D)
 {
   LanePointData data;
   data.x = lane_vector[P * D * l + p * D + X];
@@ -115,33 +115,10 @@ void add_point_to_marker(Marker & marker, double x, double y, double z)
 
 }  // anonymous namespace
 
-ColorRGBA get_traffic_light_color(float g, float y, float r, const ColorRGBA & original_color)
-{
-  ColorRGBA color;
-  color.r = 0.0;
-  color.g = 0.0;
-  color.b = 0.0;
-  color.a = 0.8;
-  if (static_cast<bool>(g)) {
-    color.g = 1.0;
-    return color;
-  }
-  if (static_cast<bool>(y)) {
-    color.g = 1.0;
-    color.r = 1.0;
-    return color;
-  }
-
-  if (static_cast<bool>(r)) {
-    color.r = 1.0;
-    return color;
-  }
-  return original_color;
-};
-
-MarkerArray create_linestring_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const std::vector<float> & linestring_vector,
+MarkerArray create_map_polyline_marker(
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & polyline_vector,
   const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
+  const std::array<float, 4> & colors, const std::string & marker_namespace,
   const std::string & frame_id)
 {
   MarkerArray marker_array;
@@ -150,49 +127,26 @@ MarkerArray create_linestring_marker(
   }
   const int64_t P = shape[2];
   const int64_t D = shape[3];
-  if (P <= 0 || D <= 0 || linestring_vector.size() % static_cast<size_t>(P * D) != 0) {
+  if (P <= 0 || D < 2 || polyline_vector.size() % static_cast<size_t>(P * D) != 0) {
     return marker_array;
   }
-  const size_t num_line_strings = linestring_vector.size() / static_cast<size_t>(P * D);
+  const size_t num_polylines = polyline_vector.size() / static_cast<size_t>(P * D);
   constexpr float near_zero_threshold = 1e-2f;
-  // The tensor layout is [x, y, one_hot_types...], so the type indices come from 2 + LineStringType
-  constexpr int64_t stop_line_type_idx = 2 + LINE_STRING_TYPE_STOP_LINE;
-  constexpr int64_t road_border_type_idx = 2 + LINE_STRING_TYPE_ROAD_BORDER;
+  ColorRGBA color;
+  color.r = colors[0];
+  color.g = colors[1];
+  color.b = colors[2];
+  color.a = colors[3];
 
-  // Dark red
-  ColorRGBA road_border_color;
-  road_border_color.r = 0.8f;
-  road_border_color.g = 0.0f;
-  road_border_color.b = 0.2f;
-  road_border_color.a = 0.8f;
-
-  // Orange
-  ColorRGBA stop_line_color;
-  stop_line_color.r = 1.0f;
-  stop_line_color.g = 0.65f;
-  stop_line_color.b = 0.0f;
-  stop_line_color.a = 0.8f;
-
-  for (size_t l = 0; l < num_line_strings; ++l) {
-    // All points in a line string share the same type; check the first point's type flag
-    const bool is_stop_line =
-      linestring_vector[P * D * static_cast<int64_t>(l) + stop_line_type_idx] > 0.5f;
-    const bool is_road_border =
-      linestring_vector[P * D * static_cast<int64_t>(l) + road_border_type_idx] > 0.5f;
-
-    if (!is_road_border && !is_stop_line) {
-      continue;
-    }
-
-    std::string ns = is_stop_line ? "stop_line" : "road_border";
-    ColorRGBA color = is_stop_line ? stop_line_color : road_border_color;
+  for (size_t l = 0; l < num_polylines; ++l) {
     Marker marker = create_base_marker(
-      stamp, frame_id, ns, static_cast<int>(l), Marker::LINE_STRIP, color, lifetime, 0.2);
+      stamp, frame_id, marker_namespace, static_cast<int>(l), Marker::LINE_STRIP, color, lifetime,
+      0.2);
 
     float total_norm = 0.0f;
     for (int64_t p = 0; p < P; ++p) {
-      const float x = linestring_vector[P * D * static_cast<int64_t>(l) + p * D + X];
-      const float y = linestring_vector[P * D * static_cast<int64_t>(l) + p * D + Y];
+      const float x = polyline_vector[P * D * static_cast<int64_t>(l) + p * D + X];
+      const float y = polyline_vector[P * D * static_cast<int64_t>(l) + p * D + Y];
       const float norm = std::sqrt(x * x + y * y);
       total_norm += norm;
 
@@ -216,10 +170,9 @@ MarkerArray create_linestring_marker(
 }
 
 MarkerArray create_lane_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const std::vector<float> & lane_vector,
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & lane_vector,
   const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
-  const std::array<float, 4> colors, const std::string & frame_id,
-  const bool set_traffic_light_color)
+  const std::array<float, 4> colors, const std::string & frame_id)
 {
   MarkerArray marker_array;
   const int64_t P = shape[2];
@@ -265,14 +218,6 @@ MarkerArray create_lane_marker(
       0.5);
     marker_sphere.scale.y = 0.5;
     marker_sphere.scale.z = 0.5;
-
-    // Apply traffic light color if requested
-    if (set_traffic_light_color) {
-      const auto g = lane_vector[P * D * l + 0 * D + TRAFFIC_LIGHT_GREEN];
-      const auto y = lane_vector[P * D * l + 0 * D + TRAFFIC_LIGHT_YELLOW];
-      const auto r = lane_vector[P * D * l + 0 * D + TRAFFIC_LIGHT_RED];
-      marker_centerline.color = get_traffic_light_color(g, y, r, lane_color);
-    }
 
     // Process points for this segment
     float total_norm = 0.0f;

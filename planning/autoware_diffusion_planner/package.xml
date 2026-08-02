@@ -50,6 +50,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>visualization_msgs</depend>
+  <depend>xtensor</depend>
 
   <exec_depend>autoware_tensorrt_plugins</exec_depend>
 

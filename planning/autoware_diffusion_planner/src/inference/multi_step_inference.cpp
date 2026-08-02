@@ -58,30 +58,42 @@ MultiStepInference::MultiStepInference(
     batch_size_ * num_elements_without_batch(EGO_HISTORY_SHAPE));
   neighbor_agents_past_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(NEIGHBOR_SHAPE));
-  static_objects_d_ = autoware::cuda_utils::make_unique<float[]>(
-    batch_size_ * num_elements_without_batch(STATIC_OBJECTS_SHAPE));
+  agent_shape_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(AGENT_SHAPE_SHAPE));
+  agent_label_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(AGENT_LABEL_SHAPE));
   lanes_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(LANES_SHAPE));
+  lane_types_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(LANE_TYPES_SHAPE));
   lanes_has_speed_limit_d_ = autoware::cuda_utils::make_unique<bool[]>(
     batch_size_ * num_elements_without_batch(LANES_HAS_SPEED_LIMIT_SHAPE));
   lanes_speed_limit_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(LANES_SPEED_LIMIT_SHAPE));
   route_lanes_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(ROUTE_LANES_SHAPE));
+  route_lane_types_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(ROUTE_LANE_TYPES_SHAPE));
   route_lanes_has_speed_limit_d_ = autoware::cuda_utils::make_unique<bool[]>(
     batch_size_ * num_elements_without_batch(ROUTE_LANES_HAS_SPEED_LIMIT_SHAPE));
   route_lanes_speed_limit_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(ROUTE_LANES_SPEED_LIMIT_SHAPE));
-  polygons_d_ = autoware::cuda_utils::make_unique<float[]>(
-    batch_size_ * num_elements_without_batch(POLYGONS_SHAPE));
-  line_strings_d_ = autoware::cuda_utils::make_unique<float[]>(
-    batch_size_ * num_elements_without_batch(LINE_STRINGS_SHAPE));
+  intersection_area_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(INTERSECTION_AREA_SHAPE));
+  stop_lines_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(STOP_LINES_SHAPE));
+  road_borders_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(ROAD_BORDERS_SHAPE));
   goal_pose_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(GOAL_POSE_SHAPE));
   ego_shape_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(EGO_SHAPE_SHAPE));
   turn_indicators_d_ = autoware::cuda_utils::make_unique<float[]>(
     batch_size_ * num_elements_without_batch(TURN_INDICATORS_SHAPE));
+  lane_traffic_light_past_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(LANE_TRAFFIC_LIGHT_PAST_SHAPE));
+  route_traffic_light_past_d_ = autoware::cuda_utils::make_unique<float[]>(
+    batch_size_ * num_elements_without_batch(ROUTE_TRAFFIC_LIGHT_PAST_SHAPE));
 
   encoding_num_elements_ = num_elements(encoding_shape);
   model_output_num_elements_ = num_elements(model_output_shape);
@@ -122,18 +134,24 @@ void MultiStepInference::load_engines(
   };
   add_encoder_tensor("ego_agent_past", EGO_HISTORY_SHAPE);
   add_encoder_tensor("neighbor_agents_past", NEIGHBOR_SHAPE);
-  add_encoder_tensor("static_objects", STATIC_OBJECTS_SHAPE);
+  add_encoder_tensor("agent_shape", AGENT_SHAPE_SHAPE);
+  add_encoder_tensor("agent_label", AGENT_LABEL_SHAPE);
   add_encoder_tensor("lanes", LANES_SHAPE);
+  add_encoder_tensor("lane_types", LANE_TYPES_SHAPE);
   add_encoder_tensor("lanes_speed_limit", LANES_SPEED_LIMIT_SHAPE);
   add_encoder_tensor("lanes_has_speed_limit", LANES_HAS_SPEED_LIMIT_SHAPE);
   add_encoder_tensor("route_lanes", ROUTE_LANES_SHAPE);
+  add_encoder_tensor("route_lane_types", ROUTE_LANE_TYPES_SHAPE);
   add_encoder_tensor("route_lanes_speed_limit", ROUTE_LANES_SPEED_LIMIT_SHAPE);
   add_encoder_tensor("route_lanes_has_speed_limit", ROUTE_LANES_HAS_SPEED_LIMIT_SHAPE);
-  add_encoder_tensor("polygons", POLYGONS_SHAPE);
-  add_encoder_tensor("line_strings", LINE_STRINGS_SHAPE);
+  add_encoder_tensor("intersection_area", INTERSECTION_AREA_SHAPE);
+  add_encoder_tensor("stop_lines", STOP_LINES_SHAPE);
+  add_encoder_tensor("road_borders", ROAD_BORDERS_SHAPE);
   add_encoder_tensor("goal_pose", GOAL_POSE_SHAPE);
   add_encoder_tensor("ego_shape", EGO_SHAPE_SHAPE);
   add_encoder_tensor("turn_indicators", TURN_INDICATORS_SHAPE);
+  add_encoder_tensor("lane_traffic_light_past", LANE_TRAFFIC_LIGHT_PAST_SHAPE);
+  add_encoder_tensor("route_traffic_light_past", ROUTE_TRAFFIC_LIGHT_PAST_SHAPE);
   encoder_network_io.emplace_back("encoding", to_dynamic_dims(encoding_shape, batch_size_));
 
   encoder_trt_ptr_ = setup_engine(
@@ -151,6 +169,8 @@ void MultiStepInference::load_engines(
   add_decoder_tensor("sampled_trajectories", SAMPLED_TRAJECTORIES_SHAPE);
   add_decoder_tensor("diffusion_time", diffusion_time_shape);
   add_decoder_tensor("neighbor_agents_past", NEIGHBOR_SHAPE);
+  add_decoder_tensor("agent_shape", AGENT_SHAPE_SHAPE);
+  add_decoder_tensor("agent_label", AGENT_LABEL_SHAPE);
   decoder_network_io.emplace_back("model_output", to_dynamic_dims(model_output_shape, batch_size_));
 
   decoder_trt_ptr_ = setup_engine(
@@ -185,8 +205,11 @@ void MultiStepInference::bind_encoder_buffers()
   encoder_trt_ptr_->setInputShape(
     "neighbor_agents_past", to_dims_with_batch(NEIGHBOR_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
-    "static_objects", to_dims_with_batch(STATIC_OBJECTS_SHAPE, batch_size_));
+    "agent_shape", to_dims_with_batch(AGENT_SHAPE_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape(
+    "agent_label", to_dims_with_batch(AGENT_LABEL_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape("lanes", to_dims_with_batch(LANES_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape("lane_types", to_dims_with_batch(LANE_TYPES_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
     "lanes_speed_limit", to_dims_with_batch(LANES_SPEED_LIMIT_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
@@ -194,33 +217,47 @@ void MultiStepInference::bind_encoder_buffers()
   encoder_trt_ptr_->setInputShape(
     "route_lanes", to_dims_with_batch(ROUTE_LANES_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
+    "route_lane_types", to_dims_with_batch(ROUTE_LANE_TYPES_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape(
     "route_lanes_speed_limit", to_dims_with_batch(ROUTE_LANES_SPEED_LIMIT_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
     "route_lanes_has_speed_limit",
     to_dims_with_batch(ROUTE_LANES_HAS_SPEED_LIMIT_SHAPE, batch_size_));
-  encoder_trt_ptr_->setInputShape("polygons", to_dims_with_batch(POLYGONS_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
-    "line_strings", to_dims_with_batch(LINE_STRINGS_SHAPE, batch_size_));
+    "intersection_area", to_dims_with_batch(INTERSECTION_AREA_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape("stop_lines", to_dims_with_batch(STOP_LINES_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape(
+    "road_borders", to_dims_with_batch(ROAD_BORDERS_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape("goal_pose", to_dims_with_batch(GOAL_POSE_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape("ego_shape", to_dims_with_batch(EGO_SHAPE_SHAPE, batch_size_));
   encoder_trt_ptr_->setInputShape(
     "turn_indicators", to_dims_with_batch(TURN_INDICATORS_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape(
+    "lane_traffic_light_past", to_dims_with_batch(LANE_TRAFFIC_LIGHT_PAST_SHAPE, batch_size_));
+  encoder_trt_ptr_->setInputShape(
+    "route_traffic_light_past", to_dims_with_batch(ROUTE_TRAFFIC_LIGHT_PAST_SHAPE, batch_size_));
 
   encoder_trt_ptr_->setTensorAddress("ego_agent_past", ego_history_d_.get());
   encoder_trt_ptr_->setTensorAddress("neighbor_agents_past", neighbor_agents_past_d_.get());
-  encoder_trt_ptr_->setTensorAddress("static_objects", static_objects_d_.get());
+  encoder_trt_ptr_->setTensorAddress("agent_shape", agent_shape_d_.get());
+  encoder_trt_ptr_->setTensorAddress("agent_label", agent_label_d_.get());
   encoder_trt_ptr_->setTensorAddress("lanes", lanes_d_.get());
+  encoder_trt_ptr_->setTensorAddress("lane_types", lane_types_d_.get());
   encoder_trt_ptr_->setTensorAddress("lanes_speed_limit", lanes_speed_limit_d_.get());
   encoder_trt_ptr_->setTensorAddress("lanes_has_speed_limit", lanes_has_speed_limit_d_.get());
   encoder_trt_ptr_->setTensorAddress("route_lanes", route_lanes_d_.get());
+  encoder_trt_ptr_->setTensorAddress("route_lane_types", route_lane_types_d_.get());
   encoder_trt_ptr_->setTensorAddress("route_lanes_speed_limit", route_lanes_speed_limit_d_.get());
   encoder_trt_ptr_->setTensorAddress(
     "route_lanes_has_speed_limit", route_lanes_has_speed_limit_d_.get());
-  encoder_trt_ptr_->setTensorAddress("polygons", polygons_d_.get());
-  encoder_trt_ptr_->setTensorAddress("line_strings", line_strings_d_.get());
+  encoder_trt_ptr_->setTensorAddress("intersection_area", intersection_area_d_.get());
+  encoder_trt_ptr_->setTensorAddress("stop_lines", stop_lines_d_.get());
+  encoder_trt_ptr_->setTensorAddress("road_borders", road_borders_d_.get());
   encoder_trt_ptr_->setTensorAddress("goal_pose", goal_pose_d_.get());
   encoder_trt_ptr_->setTensorAddress("ego_shape", ego_shape_d_.get());
   encoder_trt_ptr_->setTensorAddress("turn_indicators", turn_indicators_d_.get());
+  encoder_trt_ptr_->setTensorAddress("lane_traffic_light_past", lane_traffic_light_past_d_.get());
+  encoder_trt_ptr_->setTensorAddress("route_traffic_light_past", route_traffic_light_past_d_.get());
   encoder_trt_ptr_->setTensorAddress("encoding", encoding_d_.get());
 }
 
@@ -236,11 +273,17 @@ void MultiStepInference::bind_decoder_buffers()
     "diffusion_time", to_dims_with_batch(diffusion_time_shape, batch_size_));
   decoder_trt_ptr_->setInputShape(
     "neighbor_agents_past", to_dims_with_batch(NEIGHBOR_SHAPE, batch_size_));
+  decoder_trt_ptr_->setInputShape(
+    "agent_shape", to_dims_with_batch(AGENT_SHAPE_SHAPE, batch_size_));
+  decoder_trt_ptr_->setInputShape(
+    "agent_label", to_dims_with_batch(AGENT_LABEL_SHAPE, batch_size_));
 
   decoder_trt_ptr_->setTensorAddress("encoding", encoding_d_.get());
   decoder_trt_ptr_->setTensorAddress("sampled_trajectories", sampled_trajectories_d_.get());
   decoder_trt_ptr_->setTensorAddress("diffusion_time", diffusion_time_d_.get());
   decoder_trt_ptr_->setTensorAddress("neighbor_agents_past", neighbor_agents_past_d_.get());
+  decoder_trt_ptr_->setTensorAddress("agent_shape", agent_shape_d_.get());
+  decoder_trt_ptr_->setTensorAddress("agent_label", agent_label_d_.get());
   decoder_trt_ptr_->setTensorAddress("model_output", model_output_d_.get());
 }
 
@@ -264,17 +307,25 @@ void MultiStepInference::transfer_inputs_to_device(const preprocess::InputDataMa
   transfer_float_input(input_data_map.at("sampled_trajectories"), sampled_trajectories_d_, stream_);
   transfer_float_input(input_data_map.at("ego_agent_past"), ego_history_d_, stream_);
   transfer_float_input(input_data_map.at("neighbor_agents_past"), neighbor_agents_past_d_, stream_);
-  transfer_float_input(input_data_map.at("static_objects"), static_objects_d_, stream_);
+  transfer_float_input(input_data_map.at("agent_shape"), agent_shape_d_, stream_);
+  transfer_float_input(input_data_map.at("agent_label"), agent_label_d_, stream_);
   transfer_float_input(input_data_map.at("lanes"), lanes_d_, stream_);
+  transfer_float_input(input_data_map.at("lane_types"), lane_types_d_, stream_);
   transfer_float_input(input_data_map.at("lanes_speed_limit"), lanes_speed_limit_d_, stream_);
   transfer_float_input(input_data_map.at("route_lanes"), route_lanes_d_, stream_);
+  transfer_float_input(input_data_map.at("route_lane_types"), route_lane_types_d_, stream_);
   transfer_float_input(
     input_data_map.at("route_lanes_speed_limit"), route_lanes_speed_limit_d_, stream_);
-  transfer_float_input(input_data_map.at("polygons"), polygons_d_, stream_);
-  transfer_float_input(input_data_map.at("line_strings"), line_strings_d_, stream_);
+  transfer_float_input(input_data_map.at("intersection_area"), intersection_area_d_, stream_);
+  transfer_float_input(input_data_map.at("stop_lines"), stop_lines_d_, stream_);
+  transfer_float_input(input_data_map.at("road_borders"), road_borders_d_, stream_);
   transfer_float_input(input_data_map.at("goal_pose"), goal_pose_d_, stream_);
   transfer_float_input(input_data_map.at("ego_shape"), ego_shape_d_, stream_);
   transfer_float_input(input_data_map.at("turn_indicators"), turn_indicators_d_, stream_);
+  transfer_float_input(
+    input_data_map.at("lane_traffic_light_past"), lane_traffic_light_past_d_, stream_);
+  transfer_float_input(
+    input_data_map.at("route_traffic_light_past"), route_traffic_light_past_d_, stream_);
 
   const auto diffusion_time_it = input_data_map.find("diffusion_time");
   if (diffusion_time_it != input_data_map.end()) {
@@ -300,21 +351,20 @@ std::vector<float> MultiStepInference::create_diffusion_time(float t) const
 std::vector<float> MultiStepInference::create_current_states(
   const preprocess::InputDataMap & input_data_map) const
 {
-  const auto & ego_current_state = input_data_map.at("ego_current_state");
+  const auto & ego_history = input_data_map.at("ego_agent_past");
   const auto & neighbor_agents_past = input_data_map.at("neighbor_agents_past");
 
   std::vector<float> current_states(batch_size_ * MAX_NUM_AGENTS * POSE_DIM, 0.0f);
   for (int b = 0; b < batch_size_; ++b) {
     for (int64_t d = 0; d < POSE_DIM; ++d) {
-      current_states[(b * MAX_NUM_AGENTS * POSE_DIM) + d] =
-        ego_current_state[b * EGO_CURRENT_STATE_SHAPE[1] + d];
+      current_states[(b * MAX_NUM_AGENTS * POSE_DIM) + d] = ego_history(b, INPUT_T, d);
     }
 
     for (int64_t agent = 1; agent < MAX_NUM_AGENTS; ++agent) {
       for (int64_t d = 0; d < POSE_DIM; ++d) {
         const size_t neighbor_idx =
           (((static_cast<size_t>(b) * MAX_NUM_NEIGHBORS + (agent - 1)) * (INPUT_T + 1) + INPUT_T) *
-           11) +
+           POSE_DIM) +
           d;
         const size_t current_idx = (static_cast<size_t>(b) * MAX_NUM_AGENTS + agent) * POSE_DIM + d;
         current_states[current_idx] = neighbor_agents_past[neighbor_idx];
@@ -376,8 +426,10 @@ DpmSolver::SampleResult MultiStepInference::run_dpm_solver(
   };
 
   const DpmSolver solver(dpm_solver_steps_);
+  const auto & sampled_trajectories = input_data_map.at("sampled_trajectories");
   return solver.sample(
-    input_data_map.at("sampled_trajectories"), model_fn, correcting_fn, guidances_);
+    std::vector<float>(sampled_trajectories.cbegin(), sampled_trajectories.cend()), model_fn,
+    correcting_fn, guidances_);
 }
 
 MultiStepInference::InferenceResult MultiStepInference::infer(

@@ -40,50 +40,63 @@ SingleStepInference::SingleStepInference(
   const size_t sampled_trajectories_size =
     batch_size_ * num_elements_without_batch(SAMPLED_TRAJECTORIES_SHAPE);
   const size_t ego_history_size = batch_size_ * num_elements_without_batch(EGO_HISTORY_SHAPE);
-  const size_t ego_current_state_size =
-    batch_size_ * num_elements_without_batch(EGO_CURRENT_STATE_SHAPE);
   const size_t neighbor_agents_past_size = batch_size_ * num_elements_without_batch(NEIGHBOR_SHAPE);
-  const size_t static_objects_size = batch_size_ * num_elements_without_batch(STATIC_OBJECTS_SHAPE);
+  const size_t agent_shape_size = batch_size_ * num_elements_without_batch(AGENT_SHAPE_SHAPE);
+  const size_t agent_label_size = batch_size_ * num_elements_without_batch(AGENT_LABEL_SHAPE);
   const size_t lanes_size = batch_size_ * num_elements_without_batch(LANES_SHAPE);
+  const size_t lane_types_size = batch_size_ * num_elements_without_batch(LANE_TYPES_SHAPE);
   const size_t lanes_has_speed_limit_size =
     batch_size_ * num_elements_without_batch(LANES_HAS_SPEED_LIMIT_SHAPE);
   const size_t lanes_speed_limit_size =
     batch_size_ * num_elements_without_batch(LANES_SPEED_LIMIT_SHAPE);
   const size_t route_lanes_size = batch_size_ * num_elements_without_batch(ROUTE_LANES_SHAPE);
+  const size_t route_lane_types_size =
+    batch_size_ * num_elements_without_batch(ROUTE_LANE_TYPES_SHAPE);
   const size_t route_lanes_has_speed_limit_size =
     batch_size_ * num_elements_without_batch(ROUTE_LANES_HAS_SPEED_LIMIT_SHAPE);
   const size_t route_lanes_speed_limit_size =
     batch_size_ * num_elements_without_batch(ROUTE_LANES_SPEED_LIMIT_SHAPE);
-  const size_t polygons_size = batch_size_ * num_elements_without_batch(POLYGONS_SHAPE);
-  const size_t line_strings_size = batch_size_ * num_elements_without_batch(LINE_STRINGS_SHAPE);
+  const size_t intersection_area_size =
+    batch_size_ * num_elements_without_batch(INTERSECTION_AREA_SHAPE);
+  const size_t stop_lines_size = batch_size_ * num_elements_without_batch(STOP_LINES_SHAPE);
+  const size_t road_borders_size = batch_size_ * num_elements_without_batch(ROAD_BORDERS_SHAPE);
   const size_t goal_pose_size = batch_size_ * num_elements_without_batch(GOAL_POSE_SHAPE);
   const size_t ego_shape_size = batch_size_ * num_elements_without_batch(EGO_SHAPE_SHAPE);
   const size_t turn_indicators_size =
     batch_size_ * num_elements_without_batch(TURN_INDICATORS_SHAPE);
-  const size_t delay_size = batch_size_ * num_elements_without_batch(DELAY_SHAPE);
+  const size_t lane_traffic_light_past_size =
+    batch_size_ * num_elements_without_batch(LANE_TRAFFIC_LIGHT_PAST_SHAPE);
+  const size_t route_traffic_light_past_size =
+    batch_size_ * num_elements_without_batch(ROUTE_TRAFFIC_LIGHT_PAST_SHAPE);
   const size_t output_size = batch_size_ * num_elements_without_batch(OUTPUT_SHAPE);
   const size_t turn_indicator_logit_size =
     batch_size_ * num_elements_without_batch(TURN_INDICATOR_LOGIT_SHAPE);
 
   sampled_trajectories_d_ = autoware::cuda_utils::make_unique<float[]>(sampled_trajectories_size);
   ego_history_d_ = autoware::cuda_utils::make_unique<float[]>(ego_history_size);
-  ego_current_state_d_ = autoware::cuda_utils::make_unique<float[]>(ego_current_state_size);
   neighbor_agents_past_d_ = autoware::cuda_utils::make_unique<float[]>(neighbor_agents_past_size);
-  static_objects_d_ = autoware::cuda_utils::make_unique<float[]>(static_objects_size);
+  agent_shape_d_ = autoware::cuda_utils::make_unique<float[]>(agent_shape_size);
+  agent_label_d_ = autoware::cuda_utils::make_unique<float[]>(agent_label_size);
   lanes_d_ = autoware::cuda_utils::make_unique<float[]>(lanes_size);
+  lane_types_d_ = autoware::cuda_utils::make_unique<float[]>(lane_types_size);
   lanes_has_speed_limit_d_ = autoware::cuda_utils::make_unique<bool[]>(lanes_has_speed_limit_size);
   lanes_speed_limit_d_ = autoware::cuda_utils::make_unique<float[]>(lanes_speed_limit_size);
   route_lanes_d_ = autoware::cuda_utils::make_unique<float[]>(route_lanes_size);
+  route_lane_types_d_ = autoware::cuda_utils::make_unique<float[]>(route_lane_types_size);
   route_lanes_has_speed_limit_d_ =
     autoware::cuda_utils::make_unique<bool[]>(route_lanes_has_speed_limit_size);
   route_lanes_speed_limit_d_ =
     autoware::cuda_utils::make_unique<float[]>(route_lanes_speed_limit_size);
-  polygons_d_ = autoware::cuda_utils::make_unique<float[]>(polygons_size);
-  line_strings_d_ = autoware::cuda_utils::make_unique<float[]>(line_strings_size);
+  intersection_area_d_ = autoware::cuda_utils::make_unique<float[]>(intersection_area_size);
+  stop_lines_d_ = autoware::cuda_utils::make_unique<float[]>(stop_lines_size);
+  road_borders_d_ = autoware::cuda_utils::make_unique<float[]>(road_borders_size);
   goal_pose_d_ = autoware::cuda_utils::make_unique<float[]>(goal_pose_size);
   ego_shape_d_ = autoware::cuda_utils::make_unique<float[]>(ego_shape_size);
   turn_indicators_d_ = autoware::cuda_utils::make_unique<float[]>(turn_indicators_size);
-  delay_d_ = autoware::cuda_utils::make_unique<float[]>(delay_size);
+  lane_traffic_light_past_d_ =
+    autoware::cuda_utils::make_unique<float[]>(lane_traffic_light_past_size);
+  route_traffic_light_past_d_ =
+    autoware::cuda_utils::make_unique<float[]>(route_traffic_light_past_size);
 
   output_d_ = autoware::cuda_utils::make_unique<float[]>(output_size);
   turn_indicator_logit_d_ = autoware::cuda_utils::make_unique<float[]>(turn_indicator_logit_size);
@@ -120,21 +133,25 @@ void SingleStepInference::load_engine(const std::string & model_path)
 
   add_input_tensor("sampled_trajectories", SAMPLED_TRAJECTORIES_SHAPE);
   add_input_tensor("ego_agent_past", EGO_HISTORY_SHAPE);
-  add_input_tensor("ego_current_state", EGO_CURRENT_STATE_SHAPE);
   add_input_tensor("neighbor_agents_past", NEIGHBOR_SHAPE);
-  add_input_tensor("static_objects", STATIC_OBJECTS_SHAPE);
+  add_input_tensor("agent_shape", AGENT_SHAPE_SHAPE);
+  add_input_tensor("agent_label", AGENT_LABEL_SHAPE);
   add_input_tensor("lanes", LANES_SHAPE);
+  add_input_tensor("lane_types", LANE_TYPES_SHAPE);
   add_input_tensor("lanes_has_speed_limit", LANES_HAS_SPEED_LIMIT_SHAPE);
   add_input_tensor("lanes_speed_limit", LANES_SPEED_LIMIT_SHAPE);
   add_input_tensor("route_lanes", ROUTE_LANES_SHAPE);
-  add_input_tensor("polygons", POLYGONS_SHAPE);
-  add_input_tensor("line_strings", LINE_STRINGS_SHAPE);
+  add_input_tensor("route_lane_types", ROUTE_LANE_TYPES_SHAPE);
+  add_input_tensor("intersection_area", INTERSECTION_AREA_SHAPE);
+  add_input_tensor("stop_lines", STOP_LINES_SHAPE);
+  add_input_tensor("road_borders", ROAD_BORDERS_SHAPE);
   add_input_tensor("route_lanes_has_speed_limit", ROUTE_LANES_HAS_SPEED_LIMIT_SHAPE);
   add_input_tensor("route_lanes_speed_limit", ROUTE_LANES_SPEED_LIMIT_SHAPE);
   add_input_tensor("goal_pose", GOAL_POSE_SHAPE);
   add_input_tensor("ego_shape", EGO_SHAPE_SHAPE);
   add_input_tensor("turn_indicators", TURN_INDICATORS_SHAPE);
-  add_input_tensor("delay", DELAY_SHAPE);
+  add_input_tensor("lane_traffic_light_past", LANE_TRAFFIC_LIGHT_PAST_SHAPE);
+  add_input_tensor("route_traffic_light_past", ROUTE_TRAFFIC_LIGHT_PAST_SHAPE);
 
   network_io.emplace_back("prediction", to_dynamic_dims(OUTPUT_SHAPE, batch_size_));
   network_io.emplace_back(
@@ -154,21 +171,26 @@ void SingleStepInference::bindBuffers()
   network_trt_ptr_->setInputShape(
     "ego_agent_past", to_dims_with_batch(EGO_HISTORY_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
-    "ego_current_state", to_dims_with_batch(EGO_CURRENT_STATE_SHAPE, batch_size_));
-  network_trt_ptr_->setInputShape(
     "neighbor_agents_past", to_dims_with_batch(NEIGHBOR_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
-    "static_objects", to_dims_with_batch(STATIC_OBJECTS_SHAPE, batch_size_));
+    "agent_shape", to_dims_with_batch(AGENT_SHAPE_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape(
+    "agent_label", to_dims_with_batch(AGENT_LABEL_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape("lanes", to_dims_with_batch(LANES_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape("lane_types", to_dims_with_batch(LANE_TYPES_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
     "lanes_has_speed_limit", to_dims_with_batch(LANES_HAS_SPEED_LIMIT_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
     "lanes_speed_limit", to_dims_with_batch(LANES_SPEED_LIMIT_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
     "route_lanes", to_dims_with_batch(ROUTE_LANES_SHAPE, batch_size_));
-  network_trt_ptr_->setInputShape("polygons", to_dims_with_batch(POLYGONS_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
-    "line_strings", to_dims_with_batch(LINE_STRINGS_SHAPE, batch_size_));
+    "route_lane_types", to_dims_with_batch(ROUTE_LANE_TYPES_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape(
+    "intersection_area", to_dims_with_batch(INTERSECTION_AREA_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape("stop_lines", to_dims_with_batch(STOP_LINES_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape(
+    "road_borders", to_dims_with_batch(ROAD_BORDERS_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
     "route_lanes_speed_limit", to_dims_with_batch(ROUTE_LANES_SPEED_LIMIT_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
@@ -178,27 +200,34 @@ void SingleStepInference::bindBuffers()
   network_trt_ptr_->setInputShape("ego_shape", to_dims_with_batch(EGO_SHAPE_SHAPE, batch_size_));
   network_trt_ptr_->setInputShape(
     "turn_indicators", to_dims_with_batch(TURN_INDICATORS_SHAPE, batch_size_));
-  network_trt_ptr_->setInputShape("delay", to_dims_with_batch(DELAY_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape(
+    "lane_traffic_light_past", to_dims_with_batch(LANE_TRAFFIC_LIGHT_PAST_SHAPE, batch_size_));
+  network_trt_ptr_->setInputShape(
+    "route_traffic_light_past", to_dims_with_batch(ROUTE_TRAFFIC_LIGHT_PAST_SHAPE, batch_size_));
 
   // Bind tensor addresses once (GPU buffers are pre-allocated and stable)
   network_trt_ptr_->setTensorAddress("sampled_trajectories", sampled_trajectories_d_.get());
   network_trt_ptr_->setTensorAddress("ego_agent_past", ego_history_d_.get());
-  network_trt_ptr_->setTensorAddress("ego_current_state", ego_current_state_d_.get());
   network_trt_ptr_->setTensorAddress("neighbor_agents_past", neighbor_agents_past_d_.get());
-  network_trt_ptr_->setTensorAddress("static_objects", static_objects_d_.get());
+  network_trt_ptr_->setTensorAddress("agent_shape", agent_shape_d_.get());
+  network_trt_ptr_->setTensorAddress("agent_label", agent_label_d_.get());
   network_trt_ptr_->setTensorAddress("lanes", lanes_d_.get());
+  network_trt_ptr_->setTensorAddress("lane_types", lane_types_d_.get());
   network_trt_ptr_->setTensorAddress("lanes_has_speed_limit", lanes_has_speed_limit_d_.get());
   network_trt_ptr_->setTensorAddress("lanes_speed_limit", lanes_speed_limit_d_.get());
   network_trt_ptr_->setTensorAddress("route_lanes", route_lanes_d_.get());
+  network_trt_ptr_->setTensorAddress("route_lane_types", route_lane_types_d_.get());
   network_trt_ptr_->setTensorAddress("route_lanes_speed_limit", route_lanes_speed_limit_d_.get());
   network_trt_ptr_->setTensorAddress(
     "route_lanes_has_speed_limit", route_lanes_has_speed_limit_d_.get());
-  network_trt_ptr_->setTensorAddress("polygons", polygons_d_.get());
-  network_trt_ptr_->setTensorAddress("line_strings", line_strings_d_.get());
+  network_trt_ptr_->setTensorAddress("intersection_area", intersection_area_d_.get());
+  network_trt_ptr_->setTensorAddress("stop_lines", stop_lines_d_.get());
+  network_trt_ptr_->setTensorAddress("road_borders", road_borders_d_.get());
   network_trt_ptr_->setTensorAddress("goal_pose", goal_pose_d_.get());
   network_trt_ptr_->setTensorAddress("ego_shape", ego_shape_d_.get());
   network_trt_ptr_->setTensorAddress("turn_indicators", turn_indicators_d_.get());
-  network_trt_ptr_->setTensorAddress("delay", delay_d_.get());
+  network_trt_ptr_->setTensorAddress("lane_traffic_light_past", lane_traffic_light_past_d_.get());
+  network_trt_ptr_->setTensorAddress("route_traffic_light_past", route_traffic_light_past_d_.get());
   network_trt_ptr_->setTensorAddress("prediction", output_d_.get());
   network_trt_ptr_->setTensorAddress("turn_indicator_logit", turn_indicator_logit_d_.get());
 }
@@ -207,20 +236,26 @@ void SingleStepInference::transferInputsToDevice(const preprocess::InputDataMap 
 {
   transfer_float_input(input_data_map.at("sampled_trajectories"), sampled_trajectories_d_, stream_);
   transfer_float_input(input_data_map.at("ego_agent_past"), ego_history_d_, stream_);
-  transfer_float_input(input_data_map.at("ego_current_state"), ego_current_state_d_, stream_);
   transfer_float_input(input_data_map.at("neighbor_agents_past"), neighbor_agents_past_d_, stream_);
-  transfer_float_input(input_data_map.at("static_objects"), static_objects_d_, stream_);
+  transfer_float_input(input_data_map.at("agent_shape"), agent_shape_d_, stream_);
+  transfer_float_input(input_data_map.at("agent_label"), agent_label_d_, stream_);
   transfer_float_input(input_data_map.at("lanes"), lanes_d_, stream_);
+  transfer_float_input(input_data_map.at("lane_types"), lane_types_d_, stream_);
   transfer_float_input(input_data_map.at("lanes_speed_limit"), lanes_speed_limit_d_, stream_);
   transfer_float_input(input_data_map.at("route_lanes"), route_lanes_d_, stream_);
+  transfer_float_input(input_data_map.at("route_lane_types"), route_lane_types_d_, stream_);
   transfer_float_input(
     input_data_map.at("route_lanes_speed_limit"), route_lanes_speed_limit_d_, stream_);
-  transfer_float_input(input_data_map.at("polygons"), polygons_d_, stream_);
-  transfer_float_input(input_data_map.at("line_strings"), line_strings_d_, stream_);
+  transfer_float_input(input_data_map.at("intersection_area"), intersection_area_d_, stream_);
+  transfer_float_input(input_data_map.at("stop_lines"), stop_lines_d_, stream_);
+  transfer_float_input(input_data_map.at("road_borders"), road_borders_d_, stream_);
   transfer_float_input(input_data_map.at("goal_pose"), goal_pose_d_, stream_);
   transfer_float_input(input_data_map.at("ego_shape"), ego_shape_d_, stream_);
   transfer_float_input(input_data_map.at("turn_indicators"), turn_indicators_d_, stream_);
-  transfer_float_input(input_data_map.at("delay"), delay_d_, stream_);
+  transfer_float_input(
+    input_data_map.at("lane_traffic_light_past"), lane_traffic_light_past_d_, stream_);
+  transfer_float_input(
+    input_data_map.at("route_traffic_light_past"), route_traffic_light_past_d_, stream_);
 
   transfer_speed_mask(
     input_data_map.at("lanes_speed_limit"), lanes_has_speed_limit_d_,

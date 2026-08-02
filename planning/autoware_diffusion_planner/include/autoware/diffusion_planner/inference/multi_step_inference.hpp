@@ -70,18 +70,24 @@ private:
   autoware::cuda_utils::CudaUniquePtr<float[]> diffusion_time_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> ego_history_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> neighbor_agents_past_d_;
-  autoware::cuda_utils::CudaUniquePtr<float[]> static_objects_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> agent_shape_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> agent_label_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> lanes_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> lane_types_d_;
   autoware::cuda_utils::CudaUniquePtr<bool[]> lanes_has_speed_limit_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> lanes_speed_limit_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> route_lanes_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> route_lane_types_d_;
   autoware::cuda_utils::CudaUniquePtr<bool[]> route_lanes_has_speed_limit_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> route_lanes_speed_limit_d_;
-  autoware::cuda_utils::CudaUniquePtr<float[]> polygons_d_;
-  autoware::cuda_utils::CudaUniquePtr<float[]> line_strings_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> intersection_area_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> stop_lines_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> road_borders_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> goal_pose_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> ego_shape_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> turn_indicators_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> lane_traffic_light_past_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> route_traffic_light_past_d_;
 
   autoware::cuda_utils::CudaUniquePtr<float[]> encoding_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> model_output_d_;

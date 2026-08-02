@@ -5,6 +5,7 @@ find_package(autoware_cmake REQUIRED)
 autoware_package()
 find_package(Boost REQUIRED)
 find_package(onnxruntime QUIET)
+find_package(xtensor REQUIRED)
 
 # Options
 option(CUDA_VERBOSE "Verbose output of CUDA modules" OFF)
@@ -73,12 +74,17 @@ if(TRT_AVAIL AND CUDA_AVAIL)
   set(DIFFUSION_PLANNER_SOURCES
     src/diffusion_planner_core.cpp
     src/diffusion_planner_node.cpp
-    src/conversion/lanelet.cpp
-    src/conversion/agent.cpp
+    src/preprocessing/items/agent.cpp
+    src/preprocessing/input_builder.cpp
+    src/preprocessing/items/ego_history.cpp
+    src/preprocessing/items/ego_shape.cpp
+    src/preprocessing/items/goal_pose.cpp
+    src/preprocessing/items/map.cpp
+    src/preprocessing/items/sampled_trajectories.cpp
+    src/preprocessing/items/turn_indicators.cpp
     src/postprocessing/postprocessing_utils.cpp
-    src/preprocessing/lane_segments.cpp
     src/preprocessing/preprocessing_utils.cpp
-    src/preprocessing/traffic_signals.cpp
+    src/preprocessing/items/traffic_signals.cpp
     src/utils/utils.cpp
     src/utils/marker_utils.cpp
     src/utils/planning_factor_utils.cpp
@@ -122,6 +128,7 @@ if(TRT_AVAIL AND CUDA_AVAIL)
     ${NVONNXPARSER}
     ${CUDA_LIBRARIES}
     ${CUBLAS_LIBRARIES}
+    xtensor
   )
 
   if(onnxruntime_FOUND)
@@ -156,7 +163,6 @@ if(TRT_AVAIL AND CUDA_AVAIL)
       test/agent_edge_case_test.cpp
       test/lanelet_edge_case_test.cpp
       test/diffusion_planner_integration_test.cpp
-      test/rtc_prefix_test.cpp
       test/planning_factor_utils_test.cpp)
 
     target_link_libraries(test_diffusion_planner autoware_diffusion_planner_component)

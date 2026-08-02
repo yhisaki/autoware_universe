@@ -162,7 +162,7 @@ private:
    * @brief Publish the first traffic light on the route (from ego forward) for debug.
    * @param frame_context Context of the current frame (ego pose).
    */
-  void publish_first_traffic_light_on_route(const FrameContext & frame_context) const;
+  void publish_first_traffic_light_on_route() const;
 
   /**
    * @brief Publish planning factors (stop/slowdown) derived from the trajectory.
@@ -237,8 +237,6 @@ private:
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_{nullptr};
   autoware_utils::InterProcessPollingSubscriber<Odometry> sub_current_odometry_{
     this, "~/input/odometry"};
-  autoware_utils::InterProcessPollingSubscriber<AccelWithCovarianceStamped>
-    sub_current_acceleration_{this, "~/input/acceleration"};
   autoware_utils::InterProcessPollingSubscriber<TrackedObjects> sub_tracked_objects_{
     this, "~/input/tracked_objects"};
   autoware_utils::InterProcessPollingSubscriber<
