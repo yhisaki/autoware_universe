@@ -12,19 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "autoware/diffusion_planner/inference/guidance/guidance.hpp"
+#ifndef AUTOWARE__DIFFUSION_PLANNER__PREPROCESSING__ITEMS__INITIAL_NOISE_HPP_
+#define AUTOWARE__DIFFUSION_PLANNER__PREPROCESSING__ITEMS__INITIAL_NOISE_HPP_
 
-namespace autoware::diffusion_planner
+#include <xtensor/xarray.hpp>
+
+namespace autoware::diffusion_planner::preprocess
 {
+xt::xarray<float> create_initial_noise(double noise_scale);
+}  // namespace autoware::diffusion_planner::preprocess
 
-void Guidance::set_enabled(bool enabled)
-{
-  enabled_ = enabled;
-}
-
-bool Guidance::is_enabled() const
-{
-  return enabled_;
-}
-
-}  // namespace autoware::diffusion_planner
+#endif  // AUTOWARE__DIFFUSION_PLANNER__PREPROCESSING__ITEMS__INITIAL_NOISE_HPP_

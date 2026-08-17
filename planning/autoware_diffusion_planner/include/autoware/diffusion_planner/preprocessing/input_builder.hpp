@@ -106,7 +106,7 @@ std::unique_ptr<LaneSegmentContext> build_map_context(
  * @brief Build the model input tensors for one frame (stage 2, pure function).
  *
  * Produces a single-batch InputDataMap with every model input except
- * "sampled_trajectories" (inference-only random noise). No normalization and
+ * "initial_noise" (inference-only random noise). No normalization and
  * no batch replication is applied; callers layer those on top as needed.
  * All features are expressed in the ego frame at frame_inputs.frame_time.
  */

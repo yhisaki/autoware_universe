@@ -99,6 +99,8 @@ InputDataResult create_input_data_map(
       frame_inputs.traffic_signals_history, map_context.get_traffic_light_ids(segment_indices),
       NUM_SEGMENTS_IN_LANE, frame_inputs.frame_time, INPUT_T_WITH_CURRENT,
       constants::PREDICTION_TIME_STEP_S, params.traffic_light_group_msg_timeout_seconds);
+    input_data_map["lane_traffic_light_future"] =
+      infer_traffic_light_future(input_data_map.at("lane_traffic_light_past"));
   }
 
   // Route data on ego reference frame
@@ -116,6 +118,8 @@ InputDataResult create_input_data_map(
       frame_inputs.traffic_signals_history, map_context.get_traffic_light_ids(segment_indices),
       NUM_SEGMENTS_IN_ROUTE, frame_inputs.frame_time, INPUT_T_WITH_CURRENT,
       constants::PREDICTION_TIME_STEP_S, params.traffic_light_group_msg_timeout_seconds);
+    input_data_map["route_traffic_light_future"] =
+      infer_traffic_light_future(input_data_map.at("route_traffic_light_past"));
   }
 
   // Intersection areas, stop lines, and road borders
@@ -133,9 +137,10 @@ InputDataResult create_input_data_map(
   input_data_map["ego_shape"] = create_ego_shape(
     vehicle_spec.base_link_to_front, vehicle_spec.vehicle_length, vehicle_spec.vehicle_width);
 
-  // Turn indicators
+  // Retained in generated datasets for future model versions. The current
+  // sampler ONNX does not consume this tensor.
   input_data_map["turn_indicators"] = create_turn_indicators(
-    frame_inputs.turn_indicators_history, frame_inputs.frame_time, INPUT_T + 1,
+    frame_inputs.turn_indicators_history, frame_inputs.frame_time, INPUT_T_WITH_CURRENT,
     constants::PREDICTION_TIME_STEP_S);
 
   return input_data_map;

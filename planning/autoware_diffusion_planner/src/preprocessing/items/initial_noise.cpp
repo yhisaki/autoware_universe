@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "autoware/diffusion_planner/preprocessing/items/sampled_trajectories.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/initial_noise.hpp"
 
 #include "autoware/diffusion_planner/dimensions.hpp"
 
@@ -20,17 +20,17 @@
 
 namespace autoware::diffusion_planner::preprocess
 {
-xt::xarray<float> create_sampled_trajectories(const double temperature)
+xt::xarray<float> create_initial_noise(const double noise_scale)
 {
-  xt::xarray<float> trajectories = xt::xarray<float>::from_shape(
-    {static_cast<size_t>(MAX_NUM_AGENTS), static_cast<size_t>(OUTPUT_T + 1),
+  xt::xarray<float> noise = xt::xarray<float>::from_shape(
+    {static_cast<size_t>(MAX_NUM_AGENTS), static_cast<size_t>(OUTPUT_T),
      static_cast<size_t>(POSE_DIM)});
   std::random_device random_device;
   std::mt19937 generator(random_device());
-  std::normal_distribution<float> distribution(0.0f, 1.0f);
-  for (float & value : trajectories) {
-    value = distribution(generator) * static_cast<float>(temperature);
+  std::normal_distribution<float> distribution(0.0F, 1.0F);
+  for (float & value : noise) {
+    value = distribution(generator) * static_cast<float>(noise_scale);
   }
-  return trajectories;
+  return noise;
 }
 }  // namespace autoware::diffusion_planner::preprocess

@@ -32,8 +32,8 @@ inline constexpr int64_t MAX_NUM_NEIGHBORS = 320;
 inline constexpr int64_t MAX_NUM_AGENTS = MAX_NUM_NEIGHBORS + 1;  // Including ego
 inline constexpr int64_t HIDDEN_DIM = 256;
 inline constexpr int64_t ENCODING_TOKEN_NUM =
-  MAX_NUM_AGENTS + NUM_SEGMENTS_IN_LANE + NUM_SEGMENTS_IN_ROUTE + NUM_INTERSECTION_AREAS +
-  NUM_STOP_LINES + NUM_ROAD_BORDERS + 3;  // goal_pose, ego_shape, turn_indicator
+  MAX_NUM_NEIGHBORS + NUM_SEGMENTS_IN_LANE + NUM_SEGMENTS_IN_ROUTE + NUM_INTERSECTION_AREAS +
+  NUM_STOP_LINES + NUM_ROAD_BORDERS + 3;  // goal_pose, ego_shape, ego_history
 inline constexpr int64_t POINTS_PER_SEGMENT = 20;
 inline constexpr int64_t POINTS_PER_INTERSECTION_AREA = 40;
 inline constexpr int64_t POINTS_PER_STOP_LINE = 2;
@@ -73,16 +73,8 @@ inline constexpr int64_t OUTPUT_T = 80;  // Output timestamp number
 inline constexpr int64_t POSE_DIM = 4;   // x, y, cos(yaw), sin(yaw)
 inline constexpr std::array<int64_t, 4> OUTPUT_SHAPE = {1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
 
-inline constexpr int64_t TURN_INDICATOR_OUTPUT_NONE = 0;
-inline constexpr int64_t TURN_INDICATOR_OUTPUT_DISABLE = 1;
-inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_LEFT = 2;
-inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_RIGHT = 3;
-inline constexpr int64_t TURN_INDICATOR_OUTPUT_KEEP = 4;
-inline constexpr int64_t TURN_INDICATOR_OUTPUT_DIM = 5;
-inline constexpr std::array<int64_t, 2> TURN_INDICATOR_LOGIT_SHAPE = {1, TURN_INDICATOR_OUTPUT_DIM};
-
-inline constexpr std::array<int64_t, 4> SAMPLED_TRAJECTORIES_SHAPE = {
-  1, MAX_NUM_AGENTS, OUTPUT_T + 1, POSE_DIM};
+inline constexpr std::array<int64_t, 4> INITIAL_NOISE_SHAPE = {
+  1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
 inline constexpr std::array<int64_t, 3> EGO_HISTORY_SHAPE = {1, INPUT_T + 1, EGO_HISTORY_DIM};
 inline constexpr std::array<int64_t, 4> NEIGHBOR_SHAPE = {
   1, MAX_NUM_NEIGHBORS, INPUT_T + 1, POSE_DIM};
@@ -115,5 +107,13 @@ inline constexpr std::array<int64_t, 4> LANE_TRAFFIC_LIGHT_PAST_SHAPE = {
   1, NUM_SEGMENTS_IN_LANE, INPUT_T + 1, TRAFFIC_LIGHT_ONE_HOT_DIM};
 inline constexpr std::array<int64_t, 4> ROUTE_TRAFFIC_LIGHT_PAST_SHAPE = {
   1, NUM_SEGMENTS_IN_ROUTE, INPUT_T + 1, TRAFFIC_LIGHT_ONE_HOT_DIM};
+inline constexpr std::array<int64_t, 4> LANE_TRAFFIC_LIGHT_FUTURE_SHAPE = {
+  1, NUM_SEGMENTS_IN_LANE, OUTPUT_T, TRAFFIC_LIGHT_ONE_HOT_DIM};
+inline constexpr std::array<int64_t, 4> ROUTE_TRAFFIC_LIGHT_FUTURE_SHAPE = {
+  1, NUM_SEGMENTS_IN_ROUTE, OUTPUT_T, TRAFFIC_LIGHT_ONE_HOT_DIM};
+
+inline constexpr float POSITION_SCALE = 50.0F;
+inline constexpr float SPEED_SCALE = 15.0F;
+inline constexpr float VEHICLE_SHAPE_SCALE = 10.0F;
 }  // namespace autoware::diffusion_planner
 #endif  // AUTOWARE__DIFFUSION_PLANNER__DIMENSIONS_HPP_

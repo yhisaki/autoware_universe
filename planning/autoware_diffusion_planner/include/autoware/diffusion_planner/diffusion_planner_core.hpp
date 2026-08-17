@@ -16,15 +16,10 @@
 #define AUTOWARE__DIFFUSION_PLANNER__DIFFUSION_PLANNER_CORE_HPP_
 
 #include "autoware/diffusion_planner/dimensions.hpp"
-#include "autoware/diffusion_planner/inference/guidance/centerline_guidance.hpp"
-#include "autoware/diffusion_planner/inference/guidance/start_guidance.hpp"
-#include "autoware/diffusion_planner/inference/guidance/stop_guidance.hpp"
 #include "autoware/diffusion_planner/inference/inference.hpp"
-#include "autoware/diffusion_planner/postprocessing/turn_indicator_manager.hpp"
 #include "autoware/diffusion_planner/preprocessing/input_builder.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/map.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/traffic_signals.hpp"
-#include "autoware/diffusion_planner/utils/arg_reader.hpp"
 #include "autoware/diffusion_planner/utils/timed_buffer.hpp"
 
 #include <Eigen/Dense>
@@ -40,7 +35,6 @@
 #include <autoware_planning_msgs/msg/trajectory.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_report.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
 #include <unique_identifier_msgs/msg/uuid.hpp>
 
 #include <lanelet2_core/LaneletMap.h>
@@ -62,10 +56,7 @@ using autoware_planning_msgs::msg::Trajectory;
 using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using autoware_vehicle_msgs::msg::TurnIndicatorsReport;
 using nav_msgs::msg::Odometry;
-using std_msgs::msg::Float32MultiArray;
 using unique_identifier_msgs::msg::UUID;
-using utils::ObservationNormalization;
-using utils::StateNormalization;
 using InputDataMap = std::unordered_map<std::string, xt::xarray<float>>;
 
 struct PlannerOutput
@@ -74,18 +65,11 @@ struct PlannerOutput
   CandidateTrajectories candidate_trajectories;
   PredictedObjects predicted_objects;
   TurnIndicatorsCommand turn_indicators_command;
-  Float32MultiArray denoising_steps;
-  std::unordered_map<std::string, std::vector<bool>> guidance_triggered;
 };
 
 struct DiffusionPlannerParams
 {
-  std::string model_type;
-  std::string single_step_model_path;
-  std::string encoder_model_path;
-  std::string decoder_model_path;
-  std::string turn_indicator_model_path;
-  std::string args_path;
+  std::string model_path;
   std::string plugins_path;
   std::string backend;
   std::string trt_precision;
@@ -94,16 +78,8 @@ struct DiffusionPlannerParams
   double planning_frequency_hz;
   double traffic_light_group_msg_timeout_seconds;
   int batch_size;
-  std::vector<double> temperature_list;
-  double stopping_threshold;
-  float turn_indicator_keep_offset;
-  double turn_indicator_hold_duration;
+  std::vector<double> noise_scale_list;
   double line_string_max_step_m;
-  int dpm_solver_steps;
-  double start_guidance_reference_distance_m;
-  double start_guidance_max_scale;
-  double stop_guidance_stop_acceleration_mps2;
-  double centerline_guidance_start_time_s;
 };
 
 /**
@@ -131,8 +107,7 @@ public:
   /**
    * @brief Load TensorRT model and normalization statistics.
    *
-   * @throws std::runtime_error if args_path or model paths are invalid, if the
-   *         model version is incompatible, or if TensorRT engine setup fails.
+   * @throws std::runtime_error if the model path is invalid or engine setup fails.
    */
   void load_model();
 
@@ -150,19 +125,26 @@ public:
    */
   rclcpp::Time frame_time() const;
 
+  using BufferUpdateResult = tl::expected<preprocess::FrameInputs, std::string>;
+
   /**
-   * @brief Build model input tensors from the raw message buffers.
-   *
-   * @return Input tensors, or an error describing why they could not be built
+   * @brief Append newly received messages and return a snapshot of the current buffers.
    */
-  preprocess::InputDataResult create_input_data(
-    const std::shared_ptr<const Odometry> & ego_kinematic_state,
-    const std::shared_ptr<const TrackedObjects> & objects,
+  BufferUpdateResult update_buffer(
+    const std::vector<std::shared_ptr<const Odometry>> & ego_kinematic_states,
+    const std::vector<std::shared_ptr<const TrackedObjects>> & objects,
     const std::vector<
       std::shared_ptr<const autoware_perception_msgs::msg::TrafficLightGroupArray>> &
       traffic_signals,
-    const std::shared_ptr<const TurnIndicatorsReport> & turn_indicators,
+    const std::vector<std::shared_ptr<const TurnIndicatorsReport>> & turn_indicators,
     const LaneletRoute::ConstSharedPtr & route_ptr);
+
+  /**
+   * @brief Build normalized-shape model inputs from a validated buffer snapshot.
+   */
+  preprocess::InputDataResult create_input_data(const preprocess::FrameInputs & frame_inputs) const;
+
+  const geometry_msgs::msg::Pose & ego_pose() const { return ego_history_.back().pose.pose; }
 
   /**
    * @brief Set the lanelet map context.
@@ -186,41 +168,10 @@ public:
   bool is_map_loaded() const { return lane_segment_context_ != nullptr; }
 
   /**
-   * @brief Enable or disable start guidance.
-   *
-   * @param enabled Whether start guidance should be enabled
-   */
-  void set_start_guidance_enabled(bool enabled);
-
-  /**
-   * @brief Enable or disable stop guidance.
-   *
-   * @param enabled Whether stop guidance should be enabled
-   */
-  void set_stop_guidance_enabled(bool enabled);
-
-  /**
-   * @brief Enable or disable centerline guidance.
-   *
-   * @param enabled Whether centerline guidance should be enabled
-   */
-  void set_centerline_guidance_enabled(bool enabled);
-
-  /**
-   * @brief Get the observation normalization.
-   *
-   * @return Reference to observation normalization
-   */
-  const ObservationNormalization & get_observation_normalization() const
-  {
-    return observation_normalization_;
-  }
-
-  /**
    * @brief Run inference on the input data.
    *
    * @param input_data_map Input data for inference
-   * @return Inference result with predictions, turn indicator logits, and denoising steps
+   * @return Inference result containing normalized trajectories
    */
   InferenceResult run_inference(const InputDataMap & input_data_map);
 
@@ -268,37 +219,11 @@ private:
   DiffusionPlannerParams params_;
   VehicleSpec vehicle_spec_;
 
-  ObservationNormalization observation_normalization_;
-  StateNormalization state_normalization_;
-
   // Inference engine
   std::unique_ptr<Inference> diffusion_planner_inference_{nullptr};
-  std::shared_ptr<StartGuidance> start_guidance_{nullptr};
-  std::shared_ptr<StopGuidance> stop_guidance_{nullptr};
-  std::shared_ptr<CenterlineGuidance> centerline_guidance_{nullptr};
-  bool start_guidance_enabled_{false};
-  bool stop_guidance_enabled_{false};
-  bool centerline_guidance_enabled_{false};
 
   // Postprocessing
-  std::vector<postprocess::TurnIndicatorManager> turn_indicator_managers_;
   std::vector<preprocess::SelectedAgent> selected_agents_;
-
-  /**
-   * @brief Resize the per-trajectory turn indicator managers to the current batch size and
-   *        apply the latest hold duration / keep offset parameters to each of them.
-   */
-  void sync_turn_indicator_managers();
-
-  /**
-   * @brief Store validated frame inputs in the history buffers.
-   */
-  void update_buffers(
-    const Odometry & ego_kinematic_state, const TrackedObjects & objects,
-    const std::vector<
-      std::shared_ptr<const autoware_perception_msgs::msg::TrafficLightGroupArray>> &
-      traffic_signals,
-    const TurnIndicatorsReport & turn_indicators, const LaneletRoute::ConstSharedPtr & route_ptr);
 
   // Raw message history buffers, bounded to the model input time window.
   // All derived history data is computed statelessly from these buffers.

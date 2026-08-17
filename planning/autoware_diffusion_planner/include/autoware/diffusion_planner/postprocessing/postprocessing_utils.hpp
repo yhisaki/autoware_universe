@@ -16,7 +16,6 @@
 #define AUTOWARE__DIFFUSION_PLANNER__POSTPROCESSING__POSTPROCESSING_UTILS_HPP_
 
 #include "autoware/diffusion_planner/preprocessing/items/agent.hpp"
-#include "autoware/diffusion_planner/utils/arg_reader.hpp"
 
 #include <Eigen/Dense>
 #include <rclcpp/rclcpp.hpp>
@@ -28,7 +27,6 @@
 #include <autoware_planning_msgs/msg/trajectory.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_command.hpp>
 #include <geometry_msgs/msg/point.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
 
 #include <cassert>
 #include <string>
@@ -44,7 +42,6 @@ using autoware_planning_msgs::msg::Trajectory;
 using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using preprocess::SelectedAgent;
 using preprocess::TrackedObject;
-using std_msgs::msg::Float32MultiArray;
 using unique_identifier_msgs::msg::UUID;
 
 /**
@@ -57,12 +54,7 @@ using unique_identifier_msgs::msg::UUID;
 std::vector<std::vector<std::vector<Eigen::Matrix4d>>> parse_predictions(
   const std::vector<float> & prediction, const Eigen::Matrix4d & transform_ego_to_map);
 
-std::vector<float> denormalize_prediction(
-  const std::vector<float> & prediction, const utils::StateNormalization & state_normalization,
-  bool keep_current_state = false);
-
-Float32MultiArray create_denoising_steps_message(
-  const std::vector<float> & denoising_predictions, const std::vector<float> & denoising_timesteps);
+std::vector<float> denormalize_prediction(const std::vector<float> & prediction);
 
 /**
  * @brief Creates PredictedObjects message from parsed agent poses.
@@ -85,14 +77,11 @@ PredictedObjects create_predicted_objects(
  * @param stamp The ROS time stamp for the message.
  * @param base_position The current ego position in map coordinates.
  * @param batch_index The batch index to extract.
- * @param enable_force_stop Whether to enable force stop logic.
- * @param stopping_threshold The threshold for keeping the stopping state [m/s].
  * @return A Trajectory message for the ego agent in the specified batch.
  */
 Trajectory create_ego_trajectory(
   const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position,
-  const int64_t batch_index, const bool enable_force_stop, const double stopping_threshold);
+  const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position, int64_t batch_index);
 
 /**
  * @brief Counts valid elements in a tensor with shape (B, len, dim2, dim3).

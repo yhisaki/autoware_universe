@@ -46,15 +46,12 @@ TEST(PostprocessingUtilsTest, CreateTrajectoryAndMultipleTrajectories)
   rclcpp::Time stamp(123, 0);
 
   auto expected_points = prediction_shape[2];
-  const bool enable_force_stop = false;
-  const double stopping_threshold = 0.0;
   const auto agent_poses = postprocess::parse_predictions(data, transform);
   geometry_msgs::msg::Point base_position;
   base_position.x = 0.0;
   base_position.y = 0.0;
   base_position.z = 0.0;
-  auto traj = postprocess::create_ego_trajectory(
-    agent_poses, stamp, base_position, 0, enable_force_stop, stopping_threshold);
+  auto traj = postprocess::create_ego_trajectory(agent_poses, stamp, base_position, 0);
   ASSERT_EQ(traj.points.size(), expected_points);
 }
 

@@ -80,7 +80,7 @@ if(TRT_AVAIL AND CUDA_AVAIL)
     src/preprocessing/items/ego_shape.cpp
     src/preprocessing/items/goal_pose.cpp
     src/preprocessing/items/map.cpp
-    src/preprocessing/items/sampled_trajectories.cpp
+    src/preprocessing/items/initial_noise.cpp
     src/preprocessing/items/turn_indicators.cpp
     src/postprocessing/postprocessing_utils.cpp
     src/preprocessing/preprocessing_utils.cpp
@@ -88,14 +88,6 @@ if(TRT_AVAIL AND CUDA_AVAIL)
     src/utils/utils.cpp
     src/utils/marker_utils.cpp
     src/utils/planning_factor_utils.cpp
-    src/postprocessing/turn_indicator_manager.cpp
-    src/inference/solver/dpm_solver.cpp
-    src/inference/guidance/guidance.cpp
-    src/inference/guidance/centerline_guidance.cpp
-    src/inference/guidance/start_guidance.cpp
-    src/inference/guidance/stop_guidance.cpp
-    src/inference/guidance/utils.cpp
-    src/inference/multi_step_inference.cpp
     src/inference/single_step_inference.cpp
     src/inference/utils.cpp
   )

@@ -85,5 +85,14 @@ xt::xarray<float> create_traffic_light_past(
   const rclcpp::Time & current_time, const int64_t num_timesteps, const double time_step_s,
   const double timeout_s);
 
+/**
+ * @brief Infer the 8-second traffic-light sequence used during online inference.
+ *
+ * Green, red, unknown, and white states are held constant. Amber is assumed
+ * to last three seconds in total; its elapsed duration is estimated from the
+ * history and the remaining sequence transitions to red.
+ */
+xt::xarray<float> infer_traffic_light_future(const xt::xarray<float> & past);
+
 }  // namespace autoware::diffusion_planner::preprocess
 #endif  // AUTOWARE__DIFFUSION_PLANNER__PREPROCESSING__ITEMS__TRAFFIC_SIGNALS_HPP_

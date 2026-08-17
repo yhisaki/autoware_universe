@@ -14,64 +14,45 @@
 
 #include "autoware/diffusion_planner/preprocessing/preprocessing_utils.hpp"
 
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <stdexcept>
-#include <string>
-#include <vector>
+#include "autoware/diffusion_planner/dimensions.hpp"
 
 namespace autoware::diffusion_planner::preprocess
 {
-void normalize_input_data(InputDataMap & input_data_map, const NormalizationMap & normalization_map)
+namespace
 {
-  auto normalize_tensor = [](
-                            xt::xarray<float> & data, const std::vector<float> & mean,
-                            const std::vector<float> & std_dev) -> void {
-    assert(!data.empty() && "Data vector must not be empty");
-    assert((mean.size() == std_dev.size()) && "Mean and std must be same size");
-    assert((data.size() % std_dev.size() == 0) && "Data size must be divisible by std_dev size");
-    auto cols = std_dev.size();
-    auto rows = data.size() / cols;
+void scale_pose_xy(xt::xarray<float> & values)
+{
+  const size_t feature_dim = values.shape().back();
+  const size_t rows = values.size() / feature_dim;
+  for (size_t row = 0; row < rows; ++row) {
+    values[row * feature_dim] /= POSITION_SCALE;
+    values[row * feature_dim + 1] /= POSITION_SCALE;
+  }
+}
 
-    for (size_t row = 0; row < rows; ++row) {
-      const auto offset = row * cols;
-      const auto row_begin = data.begin() + static_cast<std::ptrdiff_t>(offset);
+void divide_all(xt::xarray<float> & values, const float scale)
+{
+  for (float & value : values) {
+    value /= scale;
+  }
+}
+}  // namespace
 
-      bool is_zero_row = std::all_of(
-        row_begin, row_begin + static_cast<std::ptrdiff_t>(cols),
-        [](float x) { return std::abs(x) < std::numeric_limits<float>::epsilon(); });
+void normalize_input_data(InputDataMap & input_data_map)
+{
+  scale_pose_xy(input_data_map.at("ego_agent_past"));
+  scale_pose_xy(input_data_map.at("neighbor_agents_past"));
+  scale_pose_xy(input_data_map.at("goal_pose"));
 
-      if (is_zero_row) continue;
-
-      for (size_t col = 0; col < cols; ++col) {
-        float m = (mean.size() == 1) ? mean[0] : mean[col];
-        float s = (std_dev.size() == 1) ? std_dev[0] : std_dev[col];
-        // Prevent division by zero
-        if (std::abs(s) < std::numeric_limits<float>::epsilon()) {
-          throw std::runtime_error("Standard deviation is zero, cannot normalize data");
-        }
-        data[offset + col] = (data[offset + col] - m) / s;
-      }
-    }
-  };
-
-  for (auto & [key, value] : input_data_map) {
-    // Skip normalization for one-hot / raw categorical inputs
-    if (
-      key == "ego_shape" || key == "agent_shape" || key == "agent_label" ||
-      key == "sampled_trajectories" || key == "turn_indicators" ||
-      key == "lane_traffic_light_past" || key == "route_traffic_light_past") {
-      continue;
-    }
-
-    if (normalization_map.find(key) == normalization_map.end()) {
-      std::string err{"Missing key " + key + " from normalization map"};
-      throw std::runtime_error(err.c_str());
-    }
-
-    const auto & [mean, std_dev] = normalization_map.at(key);
-    normalize_tensor(value, mean, std_dev);
+  for (const char * key :
+       {"lanes", "route_lanes", "intersection_area", "stop_lines", "road_borders"}) {
+    divide_all(input_data_map.at(key), POSITION_SCALE);
+  }
+  for (const char * key : {"lanes_speed_limit", "route_lanes_speed_limit"}) {
+    divide_all(input_data_map.at(key), SPEED_SCALE);
+  }
+  for (const char * key : {"agent_shape", "ego_shape"}) {
+    divide_all(input_data_map.at(key), VEHICLE_SHAPE_SCALE);
   }
 }
 

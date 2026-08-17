@@ -44,11 +44,9 @@
   <depend>lanelet2_traffic_rules</depend>
   <depend>libexpected-dev</depend>
   <depend>nav_msgs</depend>
-  <depend>nlohmann-json-dev</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
   <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
   <depend>visualization_msgs</depend>
   <depend>xtensor</depend>
 
