@@ -40,10 +40,6 @@ struct TrajectoryOptimizationParams
   double weight_yaw{0.05};
   double weight_acceleration{0.1};
   double weight_steering_rate{10.0};
-  // When the current ego speed is below this threshold, the lateral tracking weight is
-  // set to 0 for the whole horizon (the noisy lateral reference is meaningless near
-  // standstill and only produces steering jitter). 0.0 disables the gating.
-  double zero_lateral_weight_below_speed_mps{0.0};
   // Terminal state weight = terminal_weight_scale * stage state weight.
   double terminal_weight_scale{2.5};
 

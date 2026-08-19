@@ -203,6 +203,9 @@ private:
   rclcpp::Publisher<Trajectory>::SharedPtr pub_raw_trajectory_{nullptr};
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_optimization_status_{nullptr};
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_optimization_time_{nullptr};
+  // Road border avoidance debug topics (published when the avoidance runs)
+  rclcpp::Publisher<Trajectory>::SharedPtr pub_avoidance_trajectory_{nullptr};
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_avoidance_shifted_count_{nullptr};
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_{nullptr};
 
   template <typename MessageT>

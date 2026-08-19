@@ -83,6 +83,10 @@ DiffusionPlannerCore::DiffusionPlannerCore(
       params_.trajectory_optimization, vehicle_info, static_cast<size_t>(params_.batch_size));
   }
 #endif
+  if (params_.road_border_avoidance.enable) {
+    road_border_avoidance_ =
+      std::make_unique<postprocess::RoadBorderAvoidance>(params_.road_border_avoidance, vehicle_info);
+  }
 }
 
 void DiffusionPlannerCore::load_model()
@@ -124,6 +128,9 @@ void DiffusionPlannerCore::set_map(
 {
   lane_segment_context_ = std::make_unique<preprocess::LaneSegmentContext>(
     lanelet_map_ptr, params_.line_string_max_step_m);
+  if (road_border_avoidance_ && lanelet_map_ptr) {
+    road_border_avoidance_->set_map(*lanelet_map_ptr);
+  }
 }
 
 DiffusionPlannerCore::BufferUpdateResult DiffusionPlannerCore::update_buffer(
@@ -276,12 +283,30 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
   for (int i = 0; i < params_.batch_size; i++) {
     auto trajectory = postprocess::create_ego_trajectory(agent_poses, timestamp, i);
 
+    if (i == 0) {
+      // Keep the untouched model output for the debug topics.
+      output.raw_trajectory = trajectory;
+    }
+
+    if (road_border_avoidance_) {
+      auto avoidance_result =
+        road_border_avoidance_->adjust(trajectory, kinematic_state.pose.pose);
+      if (i == 0) {
+        output.avoidance_debug.active = true;
+        output.avoidance_debug.shifted_points =
+          static_cast<int>(avoidance_result.num_shifted_points);
+        output.avoidance_debug.unresolved_points =
+          static_cast<int>(avoidance_result.num_unresolved_points);
+        output.avoidance_adjusted_trajectory = avoidance_result.trajectory;
+      }
+      trajectory = std::move(avoidance_result.trajectory);
+    }
+
 #ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
     if (trajectory_optimizer_) {
       auto optimization_result = trajectory_optimizer_->optimize(
         trajectory, kinematic_state, current_steering_angle_rad, static_cast<size_t>(i));
       if (i == 0) {
-        output.raw_trajectory = trajectory;
         output.optimization_debug.attempted = true;
         output.optimization_debug.optimized = optimization_result.optimized;
         output.optimization_debug.solver_status = optimization_result.solver_status;

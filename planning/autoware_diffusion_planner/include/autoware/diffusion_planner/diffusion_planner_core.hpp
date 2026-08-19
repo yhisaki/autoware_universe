@@ -21,6 +21,7 @@
 #ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
 #include "autoware/diffusion_planner/optimization/trajectory_optimizer.hpp"
 #endif
+#include "autoware/diffusion_planner/postprocessing/road_border_avoidance.hpp"
 #include "autoware/diffusion_planner/preprocessing/input_builder.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/map.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/traffic_signals.hpp"
@@ -72,6 +73,13 @@ struct TrajectoryOptimizationDebug
   double solve_time_ms{0.0};
 };
 
+struct RoadBorderAvoidanceDebug
+{
+  bool active{false};
+  int shifted_points{0};
+  int unresolved_points{0};
+};
+
 struct PlannerOutput
 {
   Trajectory trajectory;
@@ -82,6 +90,10 @@ struct PlannerOutput
   // trajectory optimization ran. Used for debug topics.
   std::optional<Trajectory> raw_trajectory;
   TrajectoryOptimizationDebug optimization_debug;
+  // Batch-0 trajectory after the road border avoidance shift (set when it modified
+  // anything) and its stats. Used for debug topics.
+  std::optional<Trajectory> avoidance_adjusted_trajectory;
+  RoadBorderAvoidanceDebug avoidance_debug;
 };
 
 struct DiffusionPlannerParams
@@ -98,6 +110,7 @@ struct DiffusionPlannerParams
   std::vector<double> noise_scale_list;
   double line_string_max_step_m;
   optimization::TrajectoryOptimizationParams trajectory_optimization;
+  postprocess::RoadBorderAvoidanceParams road_border_avoidance;
 };
 
 /**
@@ -247,6 +260,9 @@ private:
   // acados-based trajectory optimization (nullptr when disabled by parameter)
   std::unique_ptr<optimization::TrajectoryOptimizer> trajectory_optimizer_{nullptr};
 #endif
+
+  // Road border avoidance shift applied to the raw model output (nullptr when disabled)
+  std::unique_ptr<postprocess::RoadBorderAvoidance> road_border_avoidance_{nullptr};
 
   // Postprocessing
   std::vector<preprocess::SelectedAgent> selected_agents_;

@@ -111,12 +111,6 @@
               "default": 10.0,
               "description": "Regularization weight on the steering rate input"
             },
-            "zero_lateral_weight_below_speed_mps": {
-              "type": "number",
-              "default": 0.0,
-              "minimum": 0.0,
-              "description": "When the current ego speed is below this threshold [m/s], the lateral tracking weight is set to 0 for the whole horizon. 0 disables the gating."
-            },
             "terminal_weight_scale": {
               "type": "number",
               "default": 2.5,
@@ -157,6 +151,46 @@
               "default": 50,
               "minimum": 1,
               "description": "Maximum SQP iterations per solve"
+            }
+          },
+          "required": ["enable"]
+        },
+        "road_border_avoidance": {
+          "type": "object",
+          "properties": {
+            "enable": {
+              "type": "boolean",
+              "default": false,
+              "description": "Shift raw model-output trajectory points laterally away from road borders before the trajectory optimization"
+            },
+            "footprint_margin_m": {
+              "type": "number",
+              "default": 0.2,
+              "minimum": 0.0,
+              "description": "Ego footprint inflation used for the border overlap check [m]"
+            },
+            "search_radius_m": {
+              "type": "number",
+              "default": 120.0,
+              "exclusiveMinimum": 0.0,
+              "description": "Road borders farther than this from the current ego position are ignored [m]"
+            },
+            "shift_step_m": {
+              "type": "number",
+              "default": 0.1,
+              "exclusiveMinimum": 0.0,
+              "description": "Lateral shift resolution [m]"
+            },
+            "max_lateral_shift_m": {
+              "type": "number",
+              "default": 1.5,
+              "exclusiveMinimum": 0.0,
+              "description": "Cap on the total lateral offset from the raw position [m]"
+            },
+            "propagate_shift": {
+              "type": "boolean",
+              "default": true,
+              "description": "Carry the lateral offset of an overlapping point over to all subsequent points instead of shifting only the overlapping points"
             }
           },
           "required": ["enable"]

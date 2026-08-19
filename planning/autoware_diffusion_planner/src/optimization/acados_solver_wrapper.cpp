@@ -149,12 +149,7 @@ SolverSolution AcadosSolverWrapper::solve(
   // y = [x, y, yaw, v, delta, a, delta_rate]; v and delta have no reference (see header).
   const double unscale = 1.0 / opt_dt_s;
   const double w_lon = impl_->params.weight_longitudinal;
-  // Near standstill the lateral reference carries no usable information; optionally drop
-  // the lateral tracking term entirely (gated on the current ego speed x0[3]).
-  const bool zero_lateral =
-    impl_->params.zero_lateral_weight_below_speed_mps > 0.0 &&
-    x0[3] < impl_->params.zero_lateral_weight_below_speed_mps;
-  const double w_lat = zero_lateral ? 0.0 : impl_->params.weight_lateral;
+  const double w_lat = impl_->params.weight_lateral;
   auto position_block = [&](const double yaw) {
     const double c = std::cos(yaw);
     const double s = std::sin(yaw);

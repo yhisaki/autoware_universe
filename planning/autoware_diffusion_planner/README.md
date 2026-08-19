@@ -72,7 +72,7 @@ The raw model output is a noisy, position-only 80-point sequence (x, y, cos(yaw)
 
 - **Model**: kinematic bicycle with steering-angle state — states (x, y, yaw, v, delta), inputs (acceleration, steering rate)
 - **Horizon**: N = 80, dt = 0.1 s (aligned 1:1 with the model output)
-- **Cost**: tracks the raw positions (and weakly heading), regularizes acceleration and steering rate for smoothness. The position error is split along the reference heading — longitudinal (schedule/velocity-profile freedom) and lateral (path deviation) errors are weighted separately via a per-stage rotated 2x2 weight block. Optionally the lateral weight is dropped to 0 below a configurable ego speed (`zero_lateral_weight_below_speed_mps`), since the noisy lateral reference is meaningless near standstill and only produces steering jitter. No velocity/acceleration/steering references exist (the model outputs poses only, and none are fabricated by finite differences); the velocity profile emerges from the time-indexed position tracking, the comfort regularization, and the bounds
+- **Cost**: tracks the raw positions (and weakly heading), regularizes acceleration and steering rate for smoothness. The position error is split along the reference heading — longitudinal (schedule/velocity-profile freedom) and lateral (path deviation) errors are weighted separately via a per-stage rotated 2x2 weight block. No velocity/acceleration/steering references exist (the model outputs poses only, and none are fabricated by finite differences); the velocity profile emerges from the time-indexed position tracking, the comfort regularization, and the bounds
 - **Constraints**: initial state fixed to the current ego state (base_link pose, odometry velocity, measured steering angle), velocity/steering/input box bounds, soft lateral acceleration bound
 - **Output**: 80 points (t = 0.1 .. 8.0 s, same timing convention as the raw output) that are dynamically consistent with the current ego state, with velocity, acceleration, steering angle, and heading rate profiles
 
@@ -85,7 +85,11 @@ cd scripts
 /opt/acados/.venv/bin/python3 run_optimizer_offline.py --output result.png
 ```
 
-Debug topics (published while the optimizer runs): `~/debug/optimization/raw_trajectory` (pre-optimization trajectory), `~/debug/optimization/solver_status`, `~/debug/optimization/solve_time_ms`. On solver failure the raw trajectory is published unchanged.
+Debug topics (published while the optimizer runs): `~/debug/optimization/raw_trajectory` (raw model output), `~/debug/optimization/solver_status`, `~/debug/optimization/solve_time_ms`. On solver failure the raw trajectory is published unchanged.
+
+### Road border avoidance
+
+When `road_border_avoidance.enable` is true, the raw model output is checked against the road borders of the lanelet map before being handed to the trajectory optimization. For every trajectory point the ego footprint, inflated by `footprint_margin_m`, is placed at the point's pose and tested for overlap with the road border line strings (boost::geometry). Overlapping points are shifted perpendicular to their heading, away from the nearest border, in `shift_step_m` increments until the footprint clears all borders (the total offset is capped at `max_lateral_shift_m`; if the cap is reached the shift is kept as best effort and a warning is logged). With `propagate_shift` enabled (default) the offset is carried over to all subsequent points along each point's own lateral direction, so the path stays shifted after passing the border instead of snapping back to the raw output. Yaw and all other fields stay untouched. Debug topics: `~/debug/road_border_avoidance/adjusted_trajectory` (the shifted reference) and `~/debug/road_border_avoidance/shifted_point_count`.
 
 ---
 
