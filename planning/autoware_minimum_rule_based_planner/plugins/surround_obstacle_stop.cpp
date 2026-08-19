@@ -14,7 +14,7 @@
 
 #include "surround_obstacle_stop.hpp"
 
-#include "autoware/trajectory_modifier/trajectory_modifier_utils/utils.hpp"
+#include "autoware/trajectory_processor/trajectory_modifier_utils/utils.hpp"
 
 #include <autoware/motion_utils/trajectory/trajectory.hpp>
 #include <autoware_utils/transform/transforms.hpp>
@@ -111,7 +111,7 @@ Parameters to_proximity_checker_parameters(const SurroundObstacleStopParams & pa
 
 namespace autoware::minimum_rule_based_planner::plugin
 {
-namespace utils = autoware::trajectory_modifier::utils;
+namespace utils = autoware::trajectory_processor::utils;
 
 void SurroundObstacleStop::on_initialize(const MinimumRuleBasedPlannerParams & params)
 {
