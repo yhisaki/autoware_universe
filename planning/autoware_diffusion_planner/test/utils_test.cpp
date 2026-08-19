@@ -31,42 +31,6 @@ protected:
   void SetUp() override {}
 };
 
-TEST_F(UtilsTest, CreateFloatDataDefaultFill)
-{
-  std::vector<int64_t> shape{2, 3};
-  auto data = utils::create_float_data(shape);
-  ASSERT_EQ(data.size(), 6u);
-  for (auto v : data) {
-    EXPECT_FLOAT_EQ(v, 1.0f);
-  }
-}
-
-TEST_F(UtilsTest, CreateFloatDataCustomFill)
-{
-  std::vector<int64_t> shape{4};
-  auto data = utils::create_float_data(shape, 7.5f);
-  ASSERT_EQ(data.size(), 4u);
-  for (auto v : data) {
-    EXPECT_FLOAT_EQ(v, 7.5f);
-  }
-}
-
-TEST_F(UtilsTest, CreateFloatDataEmptyShape)
-{
-  std::vector<int64_t> shape{};
-  auto data = utils::create_float_data(shape, 2.0f);
-  // By convention, empty shape means one element
-  ASSERT_EQ(data.size(), 1u);
-  EXPECT_FLOAT_EQ(data[0], 2.0f);
-}
-
-TEST_F(UtilsTest, CreateFloatDataZeroDim)
-{
-  std::vector<int64_t> shape{0, 5};
-  auto data = utils::create_float_data(shape, 3.0f);
-  ASSERT_EQ(data.size(), 0u);
-}
-
 TEST_F(UtilsTest, GetTransformMatrixIdentity)
 {
   nav_msgs::msg::Odometry odom;
@@ -140,7 +104,7 @@ TEST_F(UtilsTest, GetTransformMatrixRotation)
 
 TEST_F(UtilsTest, CheckInputMapValid)
 {
-  std::unordered_map<std::string, std::vector<float>> input_map;
+  std::unordered_map<std::string, xt::xarray<float>> input_map;
   input_map["a"] = {1.0f, 2.0f, 3.0f};
   input_map["b"] = {0.0f, -1.0f, 42.0f};
   EXPECT_TRUE(utils::check_input_map(input_map));
@@ -148,22 +112,36 @@ TEST_F(UtilsTest, CheckInputMapValid)
 
 TEST_F(UtilsTest, CheckInputMapWithInf)
 {
-  std::unordered_map<std::string, std::vector<float>> input_map;
+  std::unordered_map<std::string, xt::xarray<float>> input_map;
   input_map["a"] = {1.0f, std::numeric_limits<float>::infinity()};
   EXPECT_FALSE(utils::check_input_map(input_map));
 }
 
 TEST_F(UtilsTest, CheckInputMapWithNaN)
 {
-  std::unordered_map<std::string, std::vector<float>> input_map;
+  std::unordered_map<std::string, xt::xarray<float>> input_map;
   input_map["a"] = {1.0f, std::nanf("")};
   EXPECT_FALSE(utils::check_input_map(input_map));
 }
 
 TEST_F(UtilsTest, CheckInputMapEmpty)
 {
-  std::unordered_map<std::string, std::vector<float>> input_map;
+  std::unordered_map<std::string, xt::xarray<float>> input_map;
   EXPECT_TRUE(utils::check_input_map(input_map));
+}
+
+TEST_F(UtilsTest, ReplicateForBatchPreservesSampleShape)
+{
+  const xt::xarray<float> single_data = {{1.0f, 2.0f}, {3.0f, 4.0f}, {5.0f, 6.0f}};
+
+  const auto batch_data = utils::replicate_for_batch(single_data, 2);
+
+  ASSERT_EQ(batch_data.dimension(), 3);
+  EXPECT_EQ(batch_data.shape()[0], 2);
+  EXPECT_EQ(batch_data.shape()[1], 3);
+  EXPECT_EQ(batch_data.shape()[2], 2);
+  EXPECT_EQ(batch_data(0, 2, 1), 6.0f);
+  EXPECT_EQ(batch_data(1, 2, 1), 6.0f);
 }
 
 }  // namespace autoware::diffusion_planner::test

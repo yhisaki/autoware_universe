@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/time.hpp>
+#include <xtensor/xarray.hpp>
 
 #include <std_msgs/msg/detail/color_rgba__struct.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -37,22 +38,6 @@ using visualization_msgs::msg::Marker;
 using visualization_msgs::msg::MarkerArray;
 
 /**
- * @brief Determines the appropriate traffic light color based on the given green, yellow, and red
- * values.
- *
- * This function selects and returns a ColorRGBA value representing the traffic light color
- * according to the provided intensity values for green, yellow, and red. The original_color
- * parameter serves as a fallback or reference color.
- *
- * @param g The intensity value for green (typically in the range [0.0, 1.0]).
- * @param y The intensity value for yellow (typically in the range [0.0, 1.0]).
- * @param r The intensity value for red (typically in the range [0.0, 1.0]).
- * @param original_color The original ColorRGBA to use as a reference or fallback.
- * @return ColorRGBA The resulting color representing the traffic light state.
- */
-ColorRGBA get_traffic_light_color(float g, float y, float r, const ColorRGBA & original_color);
-
-/**
  * @brief Creates a visualization marker array representing a lane.
  *
  * This function generates a MarkerArray for visualizing a lane using the provided lane vector and
@@ -66,32 +51,32 @@ ColorRGBA get_traffic_light_color(float g, float y, float r, const ColorRGBA & o
  * @param colors An array of 4 floats specifying the RGBA color of the lane markers (default: green
  * with alpha 0.8).
  * @param frame_id The coordinate frame in which to publish the markers (default: "base_link").
- * @param set_traffic_light_color If true, sets the marker color based on traffic light state
- * (default: false).
  * @return MarkerArray containing the generated lane markers.
  */
 MarkerArray create_lane_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const std::vector<float> & lane_vector,
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & lane_vector,
   const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
   const std::array<float, 4> colors = {0.0f, 1.0f, 0.0f, 0.8f},
-  const std::string & frame_id = "base_link", const bool set_traffic_light_color = false);
+  const std::string & frame_id = "base_link");
 
 /**
- * @brief Creates a visualization marker array representing linestrings (e.g., road borders and
- * stop lines).
+ * @brief Creates a visualization marker array representing map polylines.
  *
  * @param transform_ego_to_map The transformation matrix to convert points from ego frame to map
  * frame.
- * @param linestring_vector A vector of floats representing the linestring geometry or points.
- * @param shape A vector of longs specifying the shape or dimensions of the linestring data.
+ * @param polyline_vector A vector of floats representing the polyline geometry or points.
+ * @param shape A vector of longs specifying the shape or dimensions of the polyline data.
  * @param stamp The timestamp to assign to the marker messages.
  * @param lifetime The duration for which the markers should remain visible.
+ * @param colors An array of 4 floats specifying the RGBA marker color.
+ * @param marker_namespace The namespace assigned to the markers.
  * @param frame_id The coordinate frame in which to publish the markers (default: "base_link").
- * @return MarkerArray containing the generated linestring markers.
+ * @return MarkerArray containing the generated polyline markers.
  */
-MarkerArray create_linestring_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const std::vector<float> & linestring_vector,
+MarkerArray create_map_polyline_marker(
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & polyline_vector,
   const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
+  const std::array<float, 4> & colors, const std::string & marker_namespace,
   const std::string & frame_id = "base_link");
 }  // namespace autoware::diffusion_planner::utils
 #endif  // AUTOWARE__DIFFUSION_PLANNER__UTILS__MARKER_UTILS_HPP_

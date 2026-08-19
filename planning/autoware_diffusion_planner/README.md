@@ -23,123 +23,22 @@ It is implemented as a ROS 2 component node, making it easy to integrate into Au
 Make sure that the directory specified in `planning/autoware_diffusion_planner/config/diffusion_planner.param.yaml` points to the correct model version and contains the required model weight and parameter files.
 
 ```bash
-$ ls ~/autoware_data/diffusion_planner/v3.1/
+$ ls ~/autoware_data/ml_models/diffusion_planner/v4.0/
 diffusion_planner.onnx diffusion_planner.param.json
 ```
 
-This can be downloaded from [setup-dev-env.sh](https://github.com/autowarefoundation/autoware/blob/main/setup-dev-env.sh).
+This can be downloaded by following [Download artifacts](https://github.com/autowarefoundation/autoware/blob/main/ansible/roles/artifacts/README.md#download-artifacts).
 
-### (2) Modify launch files
+### (2) Launch the planning simulator
 
-Currently, some launch files must be changed to run the planning simulator with `autoware_diffusion_planner`.
-
-```diff
-diff --git a/autoware_launch/config/control/trajectory_follower/longitudinal/pid.param.yaml b/autoware_launch/config/control/trajectory_follower/longitudinal/pid.param.yaml
---- a/autoware_launch/config/control/trajectory_follower/longitudinal/pid.param.yaml
-+++ b/autoware_launch/config/control/trajectory_follower/longitudinal/pid.param.yaml
-@@ -6,7 +6,7 @@
-     enable_overshoot_emergency: false
-     enable_large_tracking_error_emergency: true
-     enable_slope_compensation: true
--    enable_keep_stopped_until_steer_convergence: true
-+    enable_keep_stopped_until_steer_convergence: false
-
-     # state transition
-     drive_state_stop_dist: 0.5
-diff --git a/autoware_launch/config/planning/scenario_planning/common/common.param.yaml b/autoware_launch/config/planning/scenario_planning/common/common.param.yaml
---- a/autoware_launch/config/planning/scenario_planning/common/common.param.yaml
-+++ b/autoware_launch/config/planning/scenario_planning/common/common.param.yaml
-@@ -1,6 +1,6 @@
- /**:
-   ros__parameters:
--    max_vel: 4.17           # max velocity limit [m/s]
-+    max_vel: 22.2           # max velocity limit [m/s]
-
-     # constraints param for normal driving
-     normal:
-diff --git a/autoware_launch/config/system/diagnostics/planning.yaml b/autoware_launch/config/system/diagnostics/planning.yaml
---- a/autoware_launch/config/system/diagnostics/planning.yaml
-+++ b/autoware_launch/config/system/diagnostics/planning.yaml
-@@ -11,19 +11,7 @@ units:
-           - { type: link, link: /autoware/planning/trajectory_validation }
-
-   - path: /autoware/planning/trajectory_validation
--    type: and
--    list:
--      - { type: link, link: /autoware/planning/trajectory_validation/finite }
--      - { type: link, link: /autoware/planning/trajectory_validation/interval }
--      - { type: link, link: /autoware/planning/trajectory_validation/curvature }
--      - { type: link, link: /autoware/planning/trajectory_validation/angle }
--      - { type: link, link: /autoware/planning/trajectory_validation/lateral_acceleration }
--      - { type: link, link: /autoware/planning/trajectory_validation/acceleration }
--      - { type: link, link: /autoware/planning/trajectory_validation/deceleration }
--      - { type: link, link: /autoware/planning/trajectory_validation/steering }
--      - { type: link, link: /autoware/planning/trajectory_validation/steering_rate }
--      - { type: link, link: /autoware/planning/trajectory_validation/velocity_deviation }
--      - { type: link, link: /autoware/planning/trajectory_validation/trajectory_shift }
-+    type: ok
-
-   - path: /autoware/planning/routing/state
-     type: diag
-diff --git a/tier4_universe_launch/tier4_planning_launch/launch/planning.launch.xml b/tier4_universe_launch/tier4_planning_launch/launch/planning.launch.xml
---- a/tier4_universe_launch/tier4_planning_launch/launch/planning.launch.xml
-+++ b/tier4_universe_launch/tier4_planning_launch/launch/planning.launch.xml
-@@ -47,12 +47,34 @@
-       </include>
-     </group>
-
-+    <!-- trajectory generator -->
-+    <group>
-+      <push-ros-namespace namespace="trajectory_generator"/>
-+      <include file="$(find-pkg-share autoware_diffusion_planner)/launch/diffusion_planner.launch.xml">
-+        <arg name="input_odometry" value="/localization/kinematic_state"/>
-+        <arg name="input_acceleration" value="/localization/acceleration"/>
-+        <arg name="input_route" value="/planning/mission_planning/route"/>
-+        <arg name="input_traffic_signals" value="/perception/traffic_light_recognition/traffic_signals"/>
-+        <arg name="input_tracked_objects" value="/perception/object_recognition/tracking/objects"/>
-+        <arg name="input_vector_map" value="/map/vector_map"/>
-+        <arg name="input_turn_indicators" value="/vehicle/status/turn_indicators_status"/>
-+        <arg name="output_trajectories" value="/planning/generator/diffusion_planner/candidate_trajectories"/>
-+        <arg name="output_turn_indicators" value="/planning/turn_indicators_cmd"/>
-+      </include>
-+      <include file="$(find-pkg-share autoware_trajectory_optimizer)/launch/trajectory_optimizer.launch.xml">
-+        <arg name="input_trajectories" value="/planning/generator/diffusion_planner/candidate_trajectories"/>
-+        <arg name="output_traj" value="/planning/trajectory"/>
-+        <arg name="output_trajectories" value="/planning/generator/trajectory_optimizer/candidate_trajectories"/>
-+      </include>
-+    </group>
-+
-     <!-- planning validator -->
-     <group>
-       <include file="$(find-pkg-share autoware_planning_validator)/launch/planning_validator.launch.xml">
-         <arg name="container_type" value="component_container_mt"/>
-         <arg name="input_trajectory" value="/planning/scenario_planning/velocity_smoother/trajectory"/>
--        <arg name="output_trajectory" value="/planning/trajectory"/>
-+        <arg name="output_trajectory" value="/planning/trajectory/unused"/>
-         <arg name="input_objects_topic_name" value="$(var input_objects_topic_name)"/>
-         <arg name="input_pointcloud_topic_name" value="$(var input_pointcloud_topic_name)"/>
-         <arg name="planning_validator_param_path" value="$(var planning_validator_param_path)"/>
-diff --git a/tier4_universe_launch/tier4_planning_launch/launch/scenario_planning/lane_driving/behavior_planning/behavior_planning_deprecated.launch.xml b/tier4_universe_launch/tier4_planning_launch/launch/scenario_planning/lane_driving/behavior_planning/behavior_planning_deprecated.launch.xml
---- a/tier4_universe_launch/tier4_planning_launch/launch/scenario_planning/lane_driving/behavior_planning/behavior_planning_deprecated.launch.xml
-+++ b/tier4_universe_launch/tier4_planning_launch/launch/scenario_planning/lane_driving/behavior_planning/behavior_planning_deprecated.launch.xml
-@@ -240,7 +240,7 @@
-         <remap from="~/input/accel" to="/localization/acceleration"/>
-         <remap from="~/input/scenario" to="/planning/scenario_planning/scenario"/>
-         <remap from="~/output/path" to="path_with_lane_id"/>
--        <remap from="~/output/turn_indicators_cmd" to="/planning/turn_indicators_cmd"/>
-+        <remap from="~/output/turn_indicators_cmd" to="/planning/turn_indicators_cmd/unused"/>
-         <remap from="~/output/hazard_lights_cmd" to="/planning/behavior_path_planner/hazard_lights_cmd"/>
-         <remap from="~/output/modified_goal" to="/planning/scenario_planning/modified_goal"/>
-         <remap from="~/output/stop_reasons" to="/planning/scenario_planning/status/stop_reasons"/>
-```
-
-### (3) Launch the planning simulator
+Pass `planning_setting:=diffusion_planner` to switch the planning stack from the rule-based scenario planner to the diffusion planner. This argument automatically swaps the trajectory generator, the planning validator input topic, and the diagnostics graph, so no additional launch-file edits are required.
 
 ```bash
 ros2 launch autoware_launch planning_simulator.launch.xml \
   map_path:=/path/to/your/map \
   vehicle_model:=sample_vehicle \
-  sensor_model:=sample_sensor_kit
+  sensor_model:=sample_sensor_kit \
+  planning_setting:=diffusion_planner
 ```
 
 ## Features
@@ -167,6 +66,29 @@ ros2 launch autoware_launch planning_simulator.launch.xml \
 
 ---
 
+## Trajectory optimization
+
+The raw model output is a noisy, position-only 80-point sequence (x, y, cos(yaw), sin(yaw) at t = 0.1 .. 8.0 s) that does not necessarily start at base_link. When `trajectory_optimization.enable` is true, an [acados](https://docs.acados.org/)-based OCP refines it before publishing:
+
+- **Model**: kinematic bicycle with steering-angle state — states (x, y, yaw, v, delta), inputs (acceleration, steering rate)
+- **Horizon**: N = 80, dt = 0.1 s (aligned 1:1 with the model output)
+- **Cost**: tracks the raw positions (and weakly heading), regularizes acceleration and steering rate for smoothness. The position error is split along the reference heading — longitudinal (schedule/velocity-profile freedom) and lateral (path deviation) errors are weighted separately via a per-stage rotated 2x2 weight block. Optionally the lateral weight is dropped to 0 below a configurable ego speed (`zero_lateral_weight_below_speed_mps`), since the noisy lateral reference is meaningless near standstill and only produces steering jitter. No velocity/acceleration/steering references exist (the model outputs poses only, and none are fabricated by finite differences); the velocity profile emerges from the time-indexed position tracking, the comfort regularization, and the bounds
+- **Constraints**: initial state fixed to the current ego state (base_link pose, odometry velocity, measured steering angle), velocity/steering/input box bounds, soft lateral acceleration bound
+- **Output**: 80 points (t = 0.1 .. 8.0 s, same timing convention as the raw output) that are dynamically consistent with the current ego state, with velocity, acceleration, steering angle, and heading rate profiles
+
+The OCP is defined in `scripts/generate_solver.py` (vehicle model in `scripts/vehicle_model.py`); the C code is generated at build time into the build tree. Cost weights and constraint bounds are injected at node startup from ROS parameters, so tuning does not require rebuilding. Building requires acados at `ACADOS_SOURCE_DIR` (default `/opt/acados`) with its Python venv; without it the package builds with optimization support disabled.
+
+`scripts/run_optimizer_offline.py` solves the same OCP offline against a recorded or synthetic reference and plots the result for tuning:
+
+```bash
+cd scripts
+/opt/acados/.venv/bin/python3 run_optimizer_offline.py --output result.png
+```
+
+Debug topics (published while the optimizer runs): `~/debug/optimization/raw_trajectory` (pre-optimization trajectory), `~/debug/optimization/solver_status`, `~/debug/optimization/solve_time_ms`. On solver failure the raw trajectory is published unchanged.
+
+---
+
 ## Parameters
 
 {{ json_to_markdown("planning/autoware_diffusion_planner/schema/diffusion_planner.schema.json") }}
@@ -180,12 +102,12 @@ Parameters can be set via YAML (see `config/diffusion_planner.param.yaml`).
 | Topic                     | Message Type                                        | Description                |
 | ------------------------- | --------------------------------------------------- | -------------------------- |
 | `~/input/odometry`        | nav_msgs/msg/Odometry                               | Ego vehicle odometry       |
-| `~/input/acceleration`    | geometry_msgs/msg/AccelWithCovarianceStamped        | Ego acceleration           |
 | `~/input/tracked_objects` | autoware_perception_msgs/msg/TrackedObjects         | Detected dynamic objects   |
 | `~/input/traffic_signals` | autoware_perception_msgs/msg/TrafficLightGroupArray | Traffic light states       |
 | `~/input/vector_map`      | autoware_map_msgs/msg/LaneletMapBin                 | Lanelet2 map               |
 | `~/input/route`           | autoware_planning_msgs/msg/LaneletRoute             | Route information          |
 | `~/input/turn_indicators` | autoware_vehicle_msgs/msg/TurnIndicatorsReport      | Turn indicator information |
+| `~/input/steering_status` | autoware_vehicle_msgs/msg/SteeringReport            | Measured steering angle (used by the trajectory optimization) |
 
 ## Outputs
 
@@ -227,8 +149,7 @@ The model version is defined either by the directory name provided to the node o
   Incremented when **only the weight files are updated**.
   As long as the major version matches, the node remains compatible, and the new model can be used directly.
 
-To download the latest model, simply run the provided setup script:
-[How to set up a development environment](https://autowarefoundation.github.io/autoware-documentation/main/installation/autoware/source-installation/#how-to-set-up-a-development-environment)
+To download the latest model, follow [Download artifacts](https://github.com/autowarefoundation/autoware/blob/main/ansible/roles/artifacts/README.md#download-artifacts).
 
 ### Model Version History
 

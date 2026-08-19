@@ -17,6 +17,7 @@
 
 #include <autoware/cuda_utils/cuda_check_error.hpp>
 #include <autoware/tensorrt_common/tensorrt_common.hpp>
+#include <xtensor/xarray.hpp>
 
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>
@@ -102,21 +103,30 @@ bool enqueue_trt(
 
 template <class DevicePtr>
 void transfer_float_input(
-  const std::vector<float> & host_vec, const DevicePtr & device_ptr, cudaStream_t stream)
+  const xt::xarray<float> & host_tensor, const DevicePtr & device_ptr, cudaStream_t stream)
 {
   CHECK_CUDA_ERROR(cudaMemcpyAsync(
-    device_ptr.get(), host_vec.data(), host_vec.size() * sizeof(float), cudaMemcpyHostToDevice,
-    stream));
+    device_ptr.get(), host_tensor.data(), host_tensor.size() * sizeof(float),
+    cudaMemcpyHostToDevice, stream));
+}
+
+template <class DevicePtr>
+void transfer_float_input(
+  const std::vector<float> & host_vector, const DevicePtr & device_ptr, cudaStream_t stream)
+{
+  CHECK_CUDA_ERROR(cudaMemcpyAsync(
+    device_ptr.get(), host_vector.data(), host_vector.size() * sizeof(float),
+    cudaMemcpyHostToDevice, stream));
 }
 
 template <class DevicePtr>
 void transfer_speed_mask(
-  const std::vector<float> & speed_limit, const DevicePtr & device_ptr, const size_t count,
+  const xt::xarray<float> & speed_limit, const DevicePtr & device_ptr, const size_t count,
   cudaStream_t stream)
 {
   std::vector<uint8_t> bool_array(count);
   for (size_t i = 0; i < count; ++i) {
-    bool_array[i] = speed_limit[i] > std::numeric_limits<float>::epsilon();
+    bool_array[i] = speed_limit.data()[i] > std::numeric_limits<float>::epsilon();
   }
   CHECK_CUDA_ERROR(cudaMemcpyAsync(
     device_ptr.get(), bool_array.data(), count * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));

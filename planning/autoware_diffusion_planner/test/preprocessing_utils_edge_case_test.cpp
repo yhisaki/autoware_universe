@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "autoware/diffusion_planner/dimensions.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/ego_history.hpp"
 #include "autoware/diffusion_planner/preprocessing/preprocessing_utils.hpp"
 #include "autoware/diffusion_planner/utils/utils.hpp"
 
@@ -251,32 +252,7 @@ TEST_F(PreprocessingUtilsEdgeCaseTest, NormalizePartialZeroRows)
   EXPECT_FLOAT_EQ(input_data_map["f"][5], 0.0f);
 }
 
-// Test edge case: Create float data utility
-TEST_F(PreprocessingUtilsEdgeCaseTest, CreateFloatDataEdgeCases)
-{
-  // Test with empty shape - actually creates vector of size 1
-  std::vector<int64_t> empty_shape{};
-  auto empty_data = utils::create_float_data(empty_shape, 1.0f);
-  EXPECT_EQ(empty_data.size(), 1);  // Empty shape results in scalar
-
-  // Test with zero dimension
-  std::vector<int64_t> zero_shape{0, 5, 10};
-  auto zero_data = utils::create_float_data(zero_shape, 2.0f);
-  EXPECT_TRUE(zero_data.empty());
-
-  // Test with very large shape (but manageable)
-  std::vector<int64_t> large_shape{100, 100};
-  auto large_data = utils::create_float_data(large_shape, 3.0f);
-  EXPECT_EQ(large_data.size(), 10000);
-  EXPECT_FLOAT_EQ(large_data[0], 3.0f);
-  EXPECT_FLOAT_EQ(large_data[9999], 3.0f);
-
-  // Test with negative dimension (should be handled as unsigned)
-  std::vector<int64_t> negative_shape{-5, 10};
-  EXPECT_ANY_THROW(utils::create_float_data(negative_shape, 4.0f));
-}
-
-// Test: create_ego_agent_past with time-based interpolation
+// Test: create_ego_history with time-based interpolation
 TEST_F(PreprocessingUtilsEdgeCaseTest, CreateEgoAgentPastTimeInterpolation)
 {
   // Create 3 odom messages at 0.0s, 0.1s, 0.2s moving along X axis
@@ -288,6 +264,8 @@ TEST_F(PreprocessingUtilsEdgeCaseTest, CreateEgoAgentPastTimeInterpolation)
     odom.pose.pose.position.x = static_cast<double>(i);                 // 0, 1, 2
     odom.pose.pose.position.y = 0.0;
     odom.pose.pose.orientation.w = 1.0;  // identity quaternion
+    odom.twist.twist.linear.x = static_cast<double>(i + 1);
+    odom.twist.twist.angular.z = 0.1 * static_cast<double>(i);
     odom_msgs.push_back(odom);
   }
 
@@ -295,18 +273,19 @@ TEST_F(PreprocessingUtilsEdgeCaseTest, CreateEgoAgentPastTimeInterpolation)
   const rclcpp::Time ref_time(0, 200000000u);  // 0.2s
   const size_t num_timesteps = 3;
 
-  const auto result =
-    preprocess::create_ego_agent_past(odom_msgs, num_timesteps, identity, ref_time);
+  const auto result = preprocess::create_ego_history(odom_msgs, num_timesteps, identity, ref_time);
 
-  // Should have 3 timesteps * 4 features = 12 values
-  ASSERT_EQ(result.size(), num_timesteps * 4);
+  ASSERT_EQ(result.dimension(), 2);
+  EXPECT_EQ(result.shape()[0], num_timesteps);
+  EXPECT_EQ(result.shape()[1], EGO_HISTORY_DIM);
+  ASSERT_EQ(result.size(), num_timesteps * EGO_HISTORY_DIM);
 
   // Each timestep should match the odom positions (0, 1, 2) since times align exactly
   for (size_t t = 0; t < num_timesteps; ++t) {
-    const size_t base = t * 4;
-    EXPECT_NEAR(result[base + EGO_AGENT_PAST_IDX_X], static_cast<float>(t), 1e-3f)
-      << "timestep " << t;
-    EXPECT_NEAR(result[base + EGO_AGENT_PAST_IDX_Y], 0.0f, 1e-3f);
+    EXPECT_NEAR(result(t, EGO_AGENT_PAST_IDX_X), static_cast<float>(t), 1e-3f) << "timestep " << t;
+    EXPECT_NEAR(result(t, EGO_AGENT_PAST_IDX_Y), 0.0f, 1e-3f);
+    EXPECT_NEAR(result(t, EGO_AGENT_PAST_IDX_VELOCITY), static_cast<float>(t + 1), 1e-3f);
+    EXPECT_NEAR(result(t, EGO_AGENT_PAST_IDX_YAW_RATE), 0.1f * static_cast<float>(t), 1e-3f);
   }
 }
 

@@ -15,11 +15,11 @@
 #ifndef AUTOWARE__DIFFUSION_PLANNER__POSTPROCESSING__POSTPROCESSING_UTILS_HPP_
 #define AUTOWARE__DIFFUSION_PLANNER__POSTPROCESSING__POSTPROCESSING_UTILS_HPP_
 
-#include "autoware/diffusion_planner/conversion/agent.hpp"
-#include "autoware/diffusion_planner/utils/arg_reader.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/agent.hpp"
 
 #include <Eigen/Dense>
 #include <rclcpp/rclcpp.hpp>
+#include <xtensor/xarray.hpp>
 
 #include <autoware_internal_planning_msgs/msg/candidate_trajectories.hpp>
 #include <autoware_perception_msgs/msg/predicted_object.hpp>
@@ -27,7 +27,6 @@
 #include <autoware_planning_msgs/msg/trajectory.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_command.hpp>
 #include <geometry_msgs/msg/point.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
 
 #include <cassert>
 #include <string>
@@ -41,7 +40,8 @@ using autoware_perception_msgs::msg::PredictedObjects;
 using autoware_perception_msgs::msg::PredictedPath;
 using autoware_planning_msgs::msg::Trajectory;
 using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
-using std_msgs::msg::Float32MultiArray;
+using preprocess::SelectedAgent;
+using preprocess::TrackedObject;
 using unique_identifier_msgs::msg::UUID;
 
 /**
@@ -54,50 +54,42 @@ using unique_identifier_msgs::msg::UUID;
 std::vector<std::vector<std::vector<Eigen::Matrix4d>>> parse_predictions(
   const std::vector<float> & prediction, const Eigen::Matrix4d & transform_ego_to_map);
 
-std::vector<float> denormalize_prediction(
-  const std::vector<float> & prediction, const utils::StateNormalization & state_normalization,
-  bool keep_current_state = false);
-
-Float32MultiArray create_denoising_steps_message(
-  const std::vector<float> & denoising_predictions, const std::vector<float> & denoising_timesteps);
+std::vector<float> denormalize_prediction(const std::vector<float> & prediction);
 
 /**
  * @brief Creates PredictedObjects message from parsed agent poses.
  *
  * @param agent_poses The parsed agent poses [batch][agent][timestep] -> pose matrix.
- * @param ego_centric_histories The agent histories in ego-centric coordinates.
+ * @param selected_agents The currently visible agents ordered by distance from ego.
  * @param stamp The ROS time stamp for the message.
  * @param batch_index The batch index to use.
  * @return A PredictedObjects message containing predicted paths for each agent.
  */
 PredictedObjects create_predicted_objects(
   const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const std::vector<AgentHistory> & ego_centric_histories, const rclcpp::Time & stamp,
+  const std::vector<SelectedAgent> & selected_agents, const rclcpp::Time & stamp,
   const int64_t batch_index);
 
 /**
  * @brief Creates a Trajectory message from parsed agent poses for a specific batch and ego agent.
  *
+ * Only pose information is filled; the model predicts positions and headings only, so
+ * velocity and acceleration are not derived here (see the trajectory optimization).
+ *
  * @param agent_poses The parsed agent poses [batch][agent][timestep] -> pose matrix.
  * @param stamp The ROS time stamp for the message.
- * @param base_position The current ego position in map coordinates.
  * @param batch_index The batch index to extract.
- * @param velocity_smoothing_window The window size for velocity smoothing.
- * @param enable_force_stop Whether to enable force stop logic.
- * @param stopping_threshold The threshold for keeping the stopping state [m/s].
  * @return A Trajectory message for the ego agent in the specified batch.
  */
 Trajectory create_ego_trajectory(
   const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position,
-  const int64_t batch_index, const int64_t velocity_smoothing_window, const bool enable_force_stop,
-  const double stopping_threshold);
+  const rclcpp::Time & stamp, int64_t batch_index);
 
 /**
  * @brief Counts valid elements in a tensor with shape (B, len, dim2, dim3).
  * An element is considered valid if not all values in the (dim2, dim3) block are zero.
  *
- * @param data The input tensor data (flattened).
+ * @param data The input tensor data.
  * @param len The length dimension.
  * @param dim2 The second-to-last dimension.
  * @param dim3 The last dimension.
@@ -105,7 +97,7 @@ Trajectory create_ego_trajectory(
  * @return The number of valid elements in the specified batch.
  */
 int64_t count_valid_elements(
-  const std::vector<float> & data, int64_t len, int64_t dim2, int64_t dim3, int64_t batch_idx);
+  const xt::xarray<float> & data, int64_t len, int64_t dim2, int64_t dim3, int64_t batch_idx);
 
 }  // namespace autoware::diffusion_planner::postprocess
 #endif  // AUTOWARE__DIFFUSION_PLANNER__POSTPROCESSING__POSTPROCESSING_UTILS_HPP_

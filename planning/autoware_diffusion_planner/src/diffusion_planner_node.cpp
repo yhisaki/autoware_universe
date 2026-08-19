@@ -19,11 +19,8 @@
 #include "autoware/diffusion_planner/preprocessing/preprocessing_utils.hpp"
 #include "autoware/diffusion_planner/utils/marker_utils.hpp"
 #include "autoware/diffusion_planner/utils/utils.hpp"
-#include "autoware/mppi_optimizer/first_order_dubins_mppi_cost_params_ros.hpp"
-#include "autoware/mppi_optimizer/first_order_dubins_mppi_runtime_options_ros.hpp"
-#include "autoware/mppi_optimizer/first_order_dubins_mppi_vehicle_params_ros.hpp"
-#include "autoware/mppi_optimizer/mppi_debug_markers.hpp"
 
+#include <autoware_utils_uuid/uuid_helper.hpp>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/logging.hpp>
 
@@ -36,10 +33,10 @@
 #include <memory>
 #include <optional>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace autoware::diffusion_planner
@@ -72,14 +69,6 @@ std::string compute_file_hash_hex(const std::string & path)
   oss << std::hex << std::setw(sizeof(std::size_t) * 2) << std::setfill('0') << combined;
   return oss.str();
 }
-
-void record_section_time(
-  autoware_utils_system::StopWatch<std::chrono::milliseconds> & stop_watch,
-  const std::string & section_name, DiagnosticsInterface & diagnostics)
-{
-  diagnostics.add_key_value(section_name, stop_watch.toc(section_name));
-}
-
 }  // namespace
 
 DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
@@ -87,14 +76,6 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
 {
   // Initialize the node
   pub_trajectory_ = this->create_publisher<Trajectory>("~/output/trajectory", 1);
-  pub_mppi_reference_trajectory_ =
-    this->create_publisher<Trajectory>("~/debug/mppi/reference_trajectory", 1);
-  pub_mppi_optimized_trajectory_ =
-    this->create_publisher<Trajectory>("~/debug/mppi/optimized_trajectory", 1);
-  pub_mppi_markers_ = this->create_publisher<MarkerArray>("~/debug/mppi/markers", 1);
-  // Latched so late-joining debug tools see the current enable state immediately.
-  pub_mppi_enabled_ = this->create_publisher<std_msgs::msg::Bool>(
-    "~/debug/mppi/enabled", rclcpp::QoS{1}.transient_local());
   pub_trajectories_ = this->create_publisher<CandidateTrajectories>("~/output/trajectories", 1);
   pub_objects_ =
     this->create_publisher<PredictedObjects>("~/output/predicted_objects", rclcpp::QoS(1));
@@ -113,32 +94,26 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
   time_keeper_ = std::make_shared<autoware_utils::TimeKeeper>(debug_processing_time_detail_pub_);
   pub_inference_time_ =
     this->create_publisher<std_msgs::msg::Float64>("~/debug/inference_time_ms", 1);
-  pub_denoising_steps_ =
-    this->create_publisher<std_msgs::msg::Float32MultiArray>("~/debug/denoising_steps", 1);
-  pub_guidance_status_ = this->create_publisher<autoware_internal_debug_msgs::msg::StringStamped>(
-    "~/debug/guidance_status", 1);
+  pub_raw_trajectory_ =
+    this->create_publisher<Trajectory>("~/debug/optimization/raw_trajectory", 1);
+  pub_optimization_status_ =
+    this->create_publisher<std_msgs::msg::Int32>("~/debug/optimization/solver_status", 1);
+  pub_optimization_time_ =
+    this->create_publisher<std_msgs::msg::Float64>("~/debug/optimization/solve_time_ms", 1);
 
   set_up_params();
-  publish_mppi_enabled(params_.use_mppi_optimizer && !params_.shadow_mode);
   vehicle_info_ = autoware::vehicle_info_utils::VehicleInfoUtils(*this).getVehicleInfo();
+  RCLCPP_INFO_STREAM(
+    get_logger(),
+    "vehicle_info: wheel_base_m=" << vehicle_info_.wheel_base_m
+                                  << ", front_overhang_m=" << vehicle_info_.front_overhang_m
+                                  << ", rear_overhang_m=" << vehicle_info_.rear_overhang_m
+                                  << ", left_overhang_m=" << vehicle_info_.left_overhang_m
+                                  << ", right_overhang_m=" << vehicle_info_.right_overhang_m
+                                  << ", wheel_tread_m=" << vehicle_info_.wheel_tread_m);
 
   // Create core instance
   core_ = std::make_unique<DiffusionPlannerCore>(params_, vehicle_info_);
-
-  // Services to enable/disable guidance modules
-  set_start_guidance_enabled_service_ = this->create_service<SetBool>(
-    "~/service/set_start_guidance_enabled", std::bind(
-                                              &DiffusionPlanner::on_set_start_guidance_enabled,
-                                              this, std::placeholders::_1, std::placeholders::_2));
-  set_stop_guidance_enabled_service_ = this->create_service<SetBool>(
-    "~/service/set_stop_guidance_enabled", std::bind(
-                                             &DiffusionPlanner::on_set_stop_guidance_enabled, this,
-                                             std::placeholders::_1, std::placeholders::_2));
-  set_centerline_guidance_enabled_service_ = this->create_service<SetBool>(
-    "~/service/set_centerline_guidance_enabled",
-    std::bind(
-      &DiffusionPlanner::on_set_centerline_guidance_enabled, this, std::placeholders::_1,
-      std::placeholders::_2));
 
   planning_factor_interface_ =
     std::make_unique<autoware::planning_factor_interface::PlanningFactorInterface>(
@@ -179,53 +154,58 @@ DiffusionPlanner::~DiffusionPlanner() = default;
 void DiffusionPlanner::set_up_params()
 {
   // node params
-  params_.model_type = this->declare_parameter<std::string>("model.type", "single_step");
-  params_.args_path = this->declare_parameter<std::string>("model.args_path", "");
-  params_.single_step_model_path =
-    this->declare_parameter<std::string>("model.single_step_model.onnx_model_path", "");
-  params_.encoder_model_path =
-    this->declare_parameter<std::string>("model.multi_step_model.encoder_onnx_model_path", "");
-  params_.decoder_model_path =
-    this->declare_parameter<std::string>("model.multi_step_model.decoder_onnx_model_path", "");
-  params_.turn_indicator_model_path = this->declare_parameter<std::string>(
-    "model.multi_step_model.turn_indicator_onnx_model_path", "");
-  params_.dpm_solver_steps =
-    this->declare_parameter<int>("model.multi_step_model.dpm_solver_steps", 10);
+  params_.model_path = this->declare_parameter<std::string>("model.onnx_model_path", "");
   params_.backend = this->declare_parameter<std::string>("model.backend", "tensorrt");
   params_.trt_precision = this->declare_parameter<std::string>("model.precision", "fp32");
   params_.use_cuda_graph = this->declare_parameter<bool>("model.use_cuda_graph", true);
   params_.plugins_path = this->declare_parameter<std::string>("plugins_path", "");
   params_.build_only = this->declare_parameter<bool>("build_only", false);
   params_.planning_frequency_hz = this->declare_parameter<double>("planning_frequency_hz", 10.0);
-  params_.ignore_neighbors = this->declare_parameter<bool>("ignore_neighbors", false);
   params_.traffic_light_group_msg_timeout_seconds =
     this->declare_parameter<double>("traffic_light_group_msg_timeout_seconds", 0.2);
   params_.batch_size = this->declare_parameter<int>("batch_size", 1);
-  params_.temperature_list = this->declare_parameter<std::vector<double>>("temperature", {0.0});
-  params_.velocity_smoothing_window =
-    this->declare_parameter<int64_t>("velocity_smoothing_window", 8);
-  params_.stopping_threshold = this->declare_parameter<double>("stopping_threshold", 0.3);
-  params_.turn_indicator_keep_offset =
-    this->declare_parameter<float>("turn_indicator_keep_offset", -1.25f);
-  params_.turn_indicator_hold_duration =
-    this->declare_parameter<double>("turn_indicator_hold_duration", 0.0);
-  params_.shift_x = this->declare_parameter<bool>("shift_x", false);
-  params_.delay_step = this->declare_parameter<int64_t>("delay_step", 0);
+  params_.noise_scale_list = this->declare_parameter<std::vector<double>>("noise_scale", {1.0});
   params_.line_string_max_step_m = this->declare_parameter<double>("line_string_max_step_m", 5.0);
-  params_.use_time_interpolation = this->declare_parameter<bool>("use_time_interpolation", false);
-  params_.start_guidance_reference_distance_m =
-    this->declare_parameter<double>("guidance.start_guidance.reference_distance_m", 10.0);
-  params_.start_guidance_max_scale =
-    this->declare_parameter<double>("guidance.start_guidance.max_scale", 30.0);
-  params_.stop_guidance_stop_acceleration_mps2 =
-    this->declare_parameter<double>("guidance.stop_guidance.stop_acceleration_mps2", 1.0);
-  params_.centerline_guidance_start_time_s =
-    this->declare_parameter<double>("guidance.centerline_guidance.start_time_s", 2.0);
-  params_.use_mppi_optimizer = this->declare_parameter<bool>("use_mppi_optimizer", false);
-  params_.shadow_mode = this->declare_parameter<bool>("shadow_mode", false);
-  autoware::mppi_optimizer::declare_first_order_dubins_mppi_cost_params(*this);
-  autoware::mppi_optimizer::declare_first_order_dubins_mppi_vehicle_dynamics_params(*this);
-  autoware::mppi_optimizer::declare_first_order_dubins_mppi_runtime_options(*this);
+
+  // trajectory optimization params (static; changing them requires a restart)
+  auto & opt = params_.trajectory_optimization;
+  opt.enable = this->declare_parameter<bool>("trajectory_optimization.enable", false);
+  opt.weight_longitudinal =
+    this->declare_parameter<double>("trajectory_optimization.weight_longitudinal", 0.5);
+  opt.weight_lateral =
+    this->declare_parameter<double>("trajectory_optimization.weight_lateral", 0.5);
+  opt.weight_yaw = this->declare_parameter<double>("trajectory_optimization.weight_yaw", 0.05);
+  opt.weight_acceleration =
+    this->declare_parameter<double>("trajectory_optimization.weight_acceleration", 0.1);
+  opt.weight_steering_rate =
+    this->declare_parameter<double>("trajectory_optimization.weight_steering_rate", 10.0);
+  opt.zero_lateral_weight_below_speed_mps = this->declare_parameter<double>(
+    "trajectory_optimization.zero_lateral_weight_below_speed_mps", 0.0);
+  opt.terminal_weight_scale =
+    this->declare_parameter<double>("trajectory_optimization.terminal_weight_scale", 2.5);
+  opt.min_velocity_mps =
+    this->declare_parameter<double>("trajectory_optimization.min_velocity_mps", 0.0);
+  opt.max_velocity_mps =
+    this->declare_parameter<double>("trajectory_optimization.max_velocity_mps", 30.0);
+  opt.min_acceleration_mps2 =
+    this->declare_parameter<double>("trajectory_optimization.min_acceleration_mps2", -4.0);
+  opt.max_acceleration_mps2 =
+    this->declare_parameter<double>("trajectory_optimization.max_acceleration_mps2", 3.0);
+  opt.max_steering_rate_rps =
+    this->declare_parameter<double>("trajectory_optimization.max_steering_rate_rps", 1.0);
+  opt.max_lateral_acceleration_mps2 = this->declare_parameter<double>(
+    "trajectory_optimization.max_lateral_acceleration_mps2", 3.0);
+  opt.max_sqp_iterations =
+    this->declare_parameter<int>("trajectory_optimization.max_sqp_iterations", 50);
+#ifndef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+  if (opt.enable) {
+    RCLCPP_WARN(
+      get_logger(),
+      "trajectory_optimization.enable is true but this build has no acados support; "
+      "trajectory optimization is disabled.");
+    opt.enable = false;
+  }
+#endif
 
   // planning factor params
   planning_factor_params_.enable_stop =
@@ -256,42 +236,10 @@ void DiffusionPlanner::load_model()
   diagnostics_inference_->update_level_and_message(DiagnosticStatus::OK, "Model loaded");
   diagnostics_inference_->publish(get_clock()->now());
 
-  if (params_.model_type == "single_step") {
-    RCLCPP_INFO_STREAM(
-      get_logger(), "Loaded single_step_model_path="
-                      << params_.single_step_model_path
-                      << " (hash=" << compute_file_hash_hex(params_.single_step_model_path) << ")");
-  } else if (params_.model_type == "multi_step") {
-    RCLCPP_INFO_STREAM(
-      get_logger(), "Loaded encoder_model_path="
-                      << params_.encoder_model_path
-                      << " (hash=" << compute_file_hash_hex(params_.encoder_model_path) << ")");
-    RCLCPP_INFO_STREAM(
-      get_logger(), "Loaded decoder_model_path="
-                      << params_.decoder_model_path
-                      << " (hash=" << compute_file_hash_hex(params_.decoder_model_path) << ")");
-    RCLCPP_INFO_STREAM(
-      get_logger(), "Loaded turn_indicator_model_path="
-                      << params_.turn_indicator_model_path << " (hash="
-                      << compute_file_hash_hex(params_.turn_indicator_model_path) << ")");
-  }
   RCLCPP_INFO_STREAM(
-    get_logger(), "Loaded args_path=" << params_.args_path << " (hash="
-                                      << compute_file_hash_hex(params_.args_path) << ")");
-  if (params_.ignore_neighbors) {
-    RCLCPP_INFO(
-      get_logger(), "Neighbor agents disabled for diffusion inference (ignore_neighbors)");
-  }
-  if (params_.use_mppi_optimizer) {
-    RCLCPP_INFO(
-      get_logger(), "MPPI will track diffusion reference trajectory (poses + velocities)");
-  }
-  if (params_.shadow_mode) {
-    RCLCPP_INFO(
-      get_logger(),
-      "Shadow mode enabled. MPPI will not track diffusion reference trajectory (poses + "
-      "velocities)");
-  }
+    get_logger(), "Loaded model.onnx_model_path=" << params_.model_path << " (hash="
+                                                  << compute_file_hash_hex(params_.model_path)
+                                                  << ")");
 }
 
 SetParametersResult DiffusionPlanner::on_parameter(
@@ -300,62 +248,22 @@ SetParametersResult DiffusionPlanner::on_parameter(
   using autoware_utils::update_param;
   {
     DiffusionPlannerParams temp_params = params_;
-    const auto previous_args_path = params_.args_path;
-    const auto previous_model_type = params_.model_type;
-    const auto previous_single_step_model_path = params_.single_step_model_path;
-    const auto previous_encoder_model_path = params_.encoder_model_path;
-    const auto previous_decoder_model_path = params_.decoder_model_path;
-    const auto previous_turn_indicator_model_path = params_.turn_indicator_model_path;
+    const auto previous_model_path = params_.model_path;
     const auto previous_batch_size = params_.batch_size;
-    const auto previous_dpm_solver_steps = params_.dpm_solver_steps;
     const auto previous_backend = params_.backend;
     const auto previous_trt_precision = params_.trt_precision;
     const auto previous_use_cuda_graph = params_.use_cuda_graph;
     const auto previous_line_string_max_step_m = params_.line_string_max_step_m;
-    update_param<std::string>(parameters, "model.type", temp_params.model_type);
-    update_param<std::string>(parameters, "model.args_path", temp_params.args_path);
-    update_param<std::string>(
-      parameters, "model.single_step_model.onnx_model_path", temp_params.single_step_model_path);
-    update_param<std::string>(
-      parameters, "model.multi_step_model.encoder_onnx_model_path", temp_params.encoder_model_path);
-    update_param<std::string>(
-      parameters, "model.multi_step_model.decoder_onnx_model_path", temp_params.decoder_model_path);
-    update_param<std::string>(
-      parameters, "model.multi_step_model.turn_indicator_onnx_model_path",
-      temp_params.turn_indicator_model_path);
-    update_param<int>(
-      parameters, "model.multi_step_model.dpm_solver_steps", temp_params.dpm_solver_steps);
+    update_param<std::string>(parameters, "model.onnx_model_path", temp_params.model_path);
     update_param<std::string>(parameters, "model.backend", temp_params.backend);
     update_param<std::string>(parameters, "model.precision", temp_params.trt_precision);
     update_param<bool>(parameters, "model.use_cuda_graph", temp_params.use_cuda_graph);
-    update_param<bool>(parameters, "ignore_neighbors", temp_params.ignore_neighbors);
     update_param<double>(
       parameters, "traffic_light_group_msg_timeout_seconds",
       temp_params.traffic_light_group_msg_timeout_seconds);
     update_param<int>(parameters, "batch_size", temp_params.batch_size);
-    update_param<std::vector<double>>(parameters, "temperature", temp_params.temperature_list);
-    update_param<int64_t>(
-      parameters, "velocity_smoothing_window", temp_params.velocity_smoothing_window);
-    update_param<double>(parameters, "stopping_threshold", temp_params.stopping_threshold);
-    update_param<float>(
-      parameters, "turn_indicator_keep_offset", temp_params.turn_indicator_keep_offset);
-    update_param<double>(
-      parameters, "turn_indicator_hold_duration", temp_params.turn_indicator_hold_duration);
-    update_param<bool>(parameters, "shift_x", temp_params.shift_x);
-    update_param<int64_t>(parameters, "delay_step", temp_params.delay_step);
+    update_param<std::vector<double>>(parameters, "noise_scale", temp_params.noise_scale_list);
     update_param<double>(parameters, "line_string_max_step_m", temp_params.line_string_max_step_m);
-    update_param<bool>(parameters, "use_time_interpolation", temp_params.use_time_interpolation);
-    update_param<double>(
-      parameters, "guidance.start_guidance.reference_distance_m",
-      temp_params.start_guidance_reference_distance_m);
-    update_param<double>(
-      parameters, "guidance.start_guidance.max_scale", temp_params.start_guidance_max_scale);
-    update_param<double>(
-      parameters, "guidance.stop_guidance.stop_acceleration_mps2",
-      temp_params.stop_guidance_stop_acceleration_mps2);
-    update_param<double>(
-      parameters, "guidance.centerline_guidance.start_time_s",
-      temp_params.centerline_guidance_start_time_s);
     if (temp_params.trt_precision != "fp32" && temp_params.trt_precision != "fp16") {
       SetParametersResult result;
       result.successful = false;
@@ -380,17 +288,17 @@ SetParametersResult DiffusionPlanner::on_parameter(
 #endif
       return result;
     }
-    update_param<bool>(parameters, "use_mppi_optimizer", temp_params.use_mppi_optimizer);
-    update_param<bool>(parameters, "shadow_mode", temp_params.shadow_mode);
-    const bool args_path_changed = temp_params.args_path != previous_args_path;
-    const bool model_paths_changed =
-      temp_params.model_type != previous_model_type ||
-      temp_params.single_step_model_path != previous_single_step_model_path ||
-      temp_params.encoder_model_path != previous_encoder_model_path ||
-      temp_params.decoder_model_path != previous_decoder_model_path ||
-      temp_params.turn_indicator_model_path != previous_turn_indicator_model_path;
+    if (
+      temp_params.batch_size < 1 || temp_params.batch_size > 2 ||
+      temp_params.noise_scale_list.size() != static_cast<size_t>(temp_params.batch_size)) {
+      SetParametersResult result;
+      result.successful = false;
+      result.reason =
+        "batch_size must be 1 or 2 and noise_scale must contain exactly batch_size values";
+      return result;
+    }
+    const bool model_path_changed = temp_params.model_path != previous_model_path;
     const bool batch_size_changed = temp_params.batch_size != previous_batch_size;
-    const bool dpm_solver_steps_changed = temp_params.dpm_solver_steps != previous_dpm_solver_steps;
     const bool backend_changed = temp_params.backend != previous_backend;
     const bool trt_config_changed = temp_params.trt_precision != previous_trt_precision ||
                                     temp_params.use_cuda_graph != previous_use_cuda_graph;
@@ -398,11 +306,8 @@ SetParametersResult DiffusionPlanner::on_parameter(
       temp_params.line_string_max_step_m != previous_line_string_max_step_m;
     params_ = temp_params;
     core_->update_params(params_);
-    publish_mppi_enabled(params_.use_mppi_optimizer && !params_.shadow_mode);
 
-    if (
-      args_path_changed || model_paths_changed || batch_size_changed || dpm_solver_steps_changed ||
-      backend_changed || trt_config_changed) {
+    if (model_path_changed || batch_size_changed || backend_changed || trt_config_changed) {
       try {
         load_model();
       } catch (const std::exception & e) {
@@ -437,38 +342,9 @@ SetParametersResult DiffusionPlanner::on_parameter(
   return result;
 }
 
-void DiffusionPlanner::on_set_start_guidance_enabled(
-  const SetBool::Request::SharedPtr request, const SetBool::Response::SharedPtr response)
+void DiffusionPlanner::publish_first_traffic_light_on_route() const
 {
-  core_->set_start_guidance_enabled(request->data);
-
-  response->success = true;
-  response->message = request->data ? "Start guidance enabled" : "Start guidance disabled";
-}
-
-void DiffusionPlanner::on_set_stop_guidance_enabled(
-  const SetBool::Request::SharedPtr request, const SetBool::Response::SharedPtr response)
-{
-  core_->set_stop_guidance_enabled(request->data);
-
-  response->success = true;
-  response->message = request->data ? "Stop guidance enabled" : "Stop guidance disabled";
-}
-
-void DiffusionPlanner::on_set_centerline_guidance_enabled(
-  const SetBool::Request::SharedPtr request, const SetBool::Response::SharedPtr response)
-{
-  core_->set_centerline_guidance_enabled(request->data);
-
-  response->success = true;
-  response->message =
-    request->data ? "Centerline guidance enabled" : "Centerline guidance disabled";
-}
-
-void DiffusionPlanner::publish_first_traffic_light_on_route(
-  const FrameContext & frame_context) const
-{
-  const auto msg = core_->get_first_traffic_light_on_route(frame_context);
+  const auto msg = core_->get_first_traffic_light_on_route();
   pub_traffic_signal_->publish(msg);
 }
 
@@ -481,7 +357,7 @@ void DiffusionPlanner::publish_debug_markers(
     auto route_markers = utils::create_lane_marker(
       ego_to_map_transform, input_data_map.at("route_lanes"),
       std::vector<int64_t>(ROUTE_LANES_SHAPE.begin(), ROUTE_LANES_SHAPE.end()), timestamp, lifetime,
-      {0.8, 0.8, 0.8, 0.8}, "map", true);
+      {0.8, 0.8, 0.8, 0.8}, "map");
     pub_route_marker_->publish(route_markers);
   }
 
@@ -490,17 +366,24 @@ void DiffusionPlanner::publish_debug_markers(
     auto lane_markers = utils::create_lane_marker(
       ego_to_map_transform, input_data_map.at("lanes"),
       std::vector<int64_t>(LANES_SHAPE.begin(), LANES_SHAPE.end()), timestamp, lifetime,
-      {0.1, 0.1, 0.7, 0.8}, "map", true);
+      {0.1, 0.1, 0.7, 0.8}, "map");
     pub_lane_marker_->publish(lane_markers);
   }
 
   if (debug_params_.publish_debug_linestrings) {
     auto lifetime = rclcpp::Duration::from_seconds(0.2);
-    auto linestring_markers = utils::create_linestring_marker(
-      ego_to_map_transform, input_data_map.at("line_strings"),
-      std::vector<int64_t>(LINE_STRINGS_SHAPE.begin(), LINE_STRINGS_SHAPE.end()), timestamp,
-      lifetime, "map");
-    pub_linestring_marker_->publish(linestring_markers);
+    auto map_markers = utils::create_map_polyline_marker(
+      ego_to_map_transform, input_data_map.at("stop_lines"),
+      std::vector<int64_t>(STOP_LINES_SHAPE.begin(), STOP_LINES_SHAPE.end()), timestamp, lifetime,
+      {1.0f, 0.65f, 0.0f, 0.8f}, "stop_line", "map");
+    auto road_border_markers = utils::create_map_polyline_marker(
+      ego_to_map_transform, input_data_map.at("road_borders"),
+      std::vector<int64_t>(ROAD_BORDERS_SHAPE.begin(), ROAD_BORDERS_SHAPE.end()), timestamp,
+      lifetime, {0.8f, 0.0f, 0.2f, 0.8f}, "road_border", "map");
+    map_markers.markers.insert(
+      map_markers.markers.end(), road_border_markers.markers.begin(),
+      road_border_markers.markers.end());
+    pub_linestring_marker_->publish(map_markers);
   }
 }
 
@@ -535,31 +418,9 @@ void DiffusionPlanner::on_timer()
   // Take data from subscribers
   auto objects = sub_tracked_objects_.take_data();
   auto ego_kinematic_state = sub_current_odometry_.take_data();
-  auto ego_acceleration = sub_current_acceleration_.take_data();
   auto traffic_signals = sub_traffic_signals_.take_data();
   auto temp_route_ptr = route_subscriber_.take_data();
   auto turn_indicators_ptr = sub_turn_indicators_.take_data();
-
-  // Prepare frame context using core
-  const std::optional<FrameContext> frame_context = core_->create_frame_context(
-    ego_kinematic_state, ego_acceleration, objects, traffic_signals, turn_indicators_ptr,
-    temp_route_ptr, this->now());
-
-  if (!frame_context) {
-    // Log detailed information about missing inputs
-    RCLCPP_WARN_STREAM_THROTTLE(
-      get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
-      "There is no input data. objects: "
-        << (objects ? "true" : "false")
-        << ", ego_kinematic_state: " << (ego_kinematic_state ? "true" : "false")
-        << ", ego_acceleration: " << (ego_acceleration ? "true" : "false")
-        << ", route: " << (core_->get_route() ? "true" : "false")
-        << ", turn_indicators: " << (turn_indicators_ptr ? "true" : "false"));
-    diagnostics_inference_->update_level_and_message(
-      DiagnosticStatus::WARN, "No input data available for inference");
-    diagnostics_inference_->publish(current_time);
-    return;
-  }
 
   if (traffic_signals.empty()) {
     RCLCPP_WARN_THROTTLE(
@@ -567,12 +428,34 @@ void DiffusionPlanner::on_timer()
       "no traffic signal received. traffic light info will not be updated");
   }
 
-  const rclcpp::Time frame_time(frame_context->frame_time);
-  InputDataMap input_data_map = core_->create_input_data(*frame_context);
+  auto buffer_result = core_->update_buffer(
+    ego_kinematic_state, objects, traffic_signals, turn_indicators_ptr, temp_route_ptr);
+  if (!buffer_result) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
+      "Failed to update input buffers: %s", buffer_result.error().c_str());
+    diagnostics_inference_->update_level_and_message(DiagnosticStatus::WARN, buffer_result.error());
+    diagnostics_inference_->publish(current_time);
+    return;
+  }
 
-  publish_debug_markers(input_data_map, frame_context->ego_to_map_transform, frame_time);
+  auto input_data_result = core_->create_input_data(buffer_result.value());
+  if (!input_data_result) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
+      "Failed to create input data: %s", input_data_result.error().c_str());
+    diagnostics_inference_->update_level_and_message(
+      DiagnosticStatus::WARN, input_data_result.error());
+    diagnostics_inference_->publish(current_time);
+    return;
+  }
+  InputDataMap input_data_map = std::move(input_data_result.value());
+  const rclcpp::Time frame_time = core_->frame_time();
 
-  publish_first_traffic_light_on_route(*frame_context);
+  const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(core_->ego_pose());
+  publish_debug_markers(input_data_map, ego_to_map_transform, frame_time);
+
+  publish_first_traffic_light_on_route();
 
   // Calculate and record metrics for diagnostics using core
   diagnostics_inference_->add_key_value(
@@ -580,14 +463,17 @@ void DiffusionPlanner::on_timer()
   diagnostics_inference_->add_key_value(
     "valid_route_count", core_->count_valid_elements(input_data_map, "route_lanes"));
   diagnostics_inference_->add_key_value(
-    "valid_polygon_count", core_->count_valid_elements(input_data_map, "polygons"));
+    "valid_intersection_area_count",
+    core_->count_valid_elements(input_data_map, "intersection_area"));
   diagnostics_inference_->add_key_value(
-    "valid_line_string_count", core_->count_valid_elements(input_data_map, "line_strings"));
+    "valid_stop_line_count", core_->count_valid_elements(input_data_map, "stop_lines"));
+  diagnostics_inference_->add_key_value(
+    "valid_road_border_count", core_->count_valid_elements(input_data_map, "road_borders"));
   diagnostics_inference_->add_key_value(
     "valid_neighbor_count", core_->count_valid_elements(input_data_map, "neighbor_agents_past"));
 
   // normalization of data
-  preprocess::normalize_input_data(input_data_map, core_->get_observation_normalization());
+  preprocess::normalize_input_data(input_data_map);
   if (!utils::check_input_map(input_data_map)) {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
@@ -615,10 +501,15 @@ void DiffusionPlanner::on_timer()
   inference_time_msg.data = inference_result->inference_time_ms;
   pub_inference_time_->publish(inference_time_msg);
 
+  std::optional<double> current_steering_angle_rad;
+  if (const auto steering_ptr = sub_steering_.take_data()) {
+    current_steering_angle_rad = static_cast<double>(steering_ptr->steering_tire_angle);
+  }
+
   PlannerOutput planner_output;
   try {
-    planner_output =
-      core_->create_planner_output(*inference_result, *frame_context, frame_time, generator_uuid_);
+    planner_output = core_->create_planner_output(
+      *inference_result, frame_time, generator_uuid_, current_steering_angle_rad);
   } catch (const std::exception & e) {
     RCLCPP_ERROR_STREAM(get_logger(), "Postprocessing failed: " << e.what());
     diagnostics_inference_->update_level_and_message(DiagnosticStatus::ERROR, e.what());
@@ -626,174 +517,40 @@ void DiffusionPlanner::on_timer()
     return;
   }
 
-  if (!planner_output.denoising_steps.data.empty()) {
-    pub_denoising_steps_->publish(planner_output.denoising_steps);
-  }
-
-  if (params_.use_mppi_optimizer) {
-    autoware_utils_debug::ScopedTimeTrack mppi_st("mppi_optimizer", *time_keeper_);
-    stop_watch_ptr_->tic("mppi_optimizer");
-    if (!mppi_optimizer_ || prev_route_.header.stamp != core_->get_route()->header.stamp) {
-      mppi_optimizer_ = std::make_unique<autoware::mppi_optimizer::FirstOrderDubinsMppiInterface>();
-      mppi_optimizer_->setCostParams(
-        autoware::mppi_optimizer::get_first_order_dubins_mppi_cost_params(*this));
-      mppi_optimizer_->setVehicleParams(
-        autoware::mppi_optimizer::get_first_order_dubins_mppi_vehicle_params(*this));
-      mppi_optimizer_->setRuntimeOptions(
-        autoware::mppi_optimizer::get_first_order_dubins_mppi_runtime_options(*this));
-      prev_route_ = *core_->get_route();
-      extended_route_handler_ =
-        std::make_shared<autoware::avoidance_target_detector::ExtendedRouteHandler>(
-          lanelet_map_msg_, prev_route_);
-      extended_route_handler_->create_map();
-      const auto road_borders = extended_route_handler_->get_road_borders();
-      road_border_rtree_ = prepare_road_border_rtree(road_borders);
-      drivable_area_rtree_ =
-        prepare_drivable_area_rtree(extended_route_handler_->get_extended_route_bounds());
-    }
-
-    try {
-      autoware_utils_debug::ScopedTimeTrack optimize_trajectory_st(
-        "mppi_optimizer/optimize_trajectory", *time_keeper_);
-      stop_watch_ptr_->tic("mppi_optimizer/optimize_trajectory");
-      const std::optional<geometry_msgs::msg::AccelWithCovarianceStamped> ego_acceleration_for_mppi{
-        frame_context->ego_acceleration};
-      const auto steering_status = sub_steering_status_.take_data();
-      const std::optional<SteeringReport> ego_steering =
-        steering_status ? std::make_optional(*steering_status) : std::nullopt;
-
-      object_selector_.update_objects(
-        now(), *objects, planner_output.trajectory, *extended_route_handler_);
-      auto avoidance_targets = object_selector_.get_avoidance_targets(
-        *objects, planner_output.trajectory, extended_route_handler_->get_extended_route_bounds());
-      const auto driving_along_targets = object_selector_.get_driving_along_vehicles(*objects);
-
-      const auto margin = vehicle_info_.max_longitudinal_offset_m + 1.0;
-      const auto road_borders_subset =
-        get_road_border_subset(road_border_rtree_, planner_output.trajectory, margin);
-      const auto drivable_area_subset =
-        get_drivable_area_subset(drivable_area_rtree_, planner_output.trajectory, margin);
-
-      auto all_targets = avoidance_targets;
-      all_targets.objects.insert(
-        all_targets.objects.end(), driving_along_targets.objects.begin(),
-        driving_along_targets.objects.end());
-      const auto mppi_result = mppi_optimizer_->optimizeTrajectory(
-        planner_output.trajectory, frame_context->ego_kinematic_state, ego_acceleration_for_mppi,
-        ego_steering, avoidance_targets, to_mppi_segments(road_borders_subset),
-        to_mppi_segments(drivable_area_subset));
-      pub_mppi_markers_->publish(
-        autoware::mppi_optimizer::createMppiDebugMarkers(
-          mppi_result.debug, road_borders_subset, drivable_area_subset, avoidance_targets,
-          driving_along_targets, frame_context->ego_kinematic_state.pose.pose.position.z));
-      record_section_time(
-        *stop_watch_ptr_, "mppi_optimizer/optimize_trajectory", *diagnostics_inference_);
-      const bool apply_mppi = !params_.shadow_mode;
-      if (apply_mppi) {
-        planner_output.trajectory = mppi_result.trajectory;
-      }
-      publish_mppi_enabled(apply_mppi);
-
-      autoware_utils_debug::ScopedTimeTrack publish_debug_st(
-        "mppi_optimizer/publish_debug", *time_keeper_);
-      stop_watch_ptr_->tic("mppi_optimizer/publish_debug");
-      publish_mppi_debug(mppi_result.debug, planner_output.trajectory.header.frame_id, frame_time);
-      if (!planner_output.candidate_trajectories.candidate_trajectories.empty()) {
-        planner_output.candidate_trajectories.candidate_trajectories.front().points =
-          planner_output.trajectory.points;
-      }
-      record_section_time(
-        *stop_watch_ptr_, "mppi_optimizer/publish_debug", *diagnostics_inference_);
-    } catch (const std::runtime_error & e) {
-      publish_mppi_enabled(false);
-      RCLCPP_ERROR_STREAM(get_logger(), "MPPI optimization failed: " << e.what());
-      diagnostics_inference_->update_level_and_message(DiagnosticStatus::ERROR, e.what());
-      diagnostics_inference_->publish(frame_time);
-      return;
-    }
-    record_section_time(*stop_watch_ptr_, "mppi_optimizer", *diagnostics_inference_);
-  } else {
-    publish_mppi_enabled(false);
-  }
-
-  publish_guidance_status(planner_output.guidance_triggered, frame_time);
-
   pub_trajectory_->publish(planner_output.trajectory);
   pub_trajectories_->publish(planner_output.candidate_trajectories);
   pub_objects_->publish(planner_output.predicted_objects);
   pub_turn_indicators_->publish(planner_output.turn_indicators_command);
 
+  const auto & optimization_debug = planner_output.optimization_debug;
+  if (optimization_debug.attempted) {
+    if (planner_output.raw_trajectory) {
+      pub_raw_trajectory_->publish(*planner_output.raw_trajectory);
+    }
+    std_msgs::msg::Int32 status_msg;
+    status_msg.data = optimization_debug.solver_status;
+    pub_optimization_status_->publish(status_msg);
+    std_msgs::msg::Float64 solve_time_msg;
+    solve_time_msg.data = optimization_debug.solve_time_ms;
+    pub_optimization_time_->publish(solve_time_msg);
+    if (!optimization_debug.optimized) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
+        "Trajectory optimization failed (acados status %d); publishing the raw trajectory.",
+        optimization_debug.solver_status);
+      diagnostics_inference_->update_level_and_message(
+        DiagnosticStatus::WARN, "Trajectory optimization failed");
+    }
+  }
+
   publish_planning_factor(planner_output.trajectory);
 
   // Publish diagnostics
   diagnostics_inference_->publish(frame_time);
-
-  // Publish processing time
   autoware_internal_debug_msgs::msg::Float64Stamped processing_time_msg;
   processing_time_msg.stamp = get_clock()->now();
   processing_time_msg.data = stop_watch_ptr_->toc("processing_time", true);
   debug_processing_time_pub_->publish(processing_time_msg);
-}
-
-void DiffusionPlanner::publish_guidance_status(
-  const std::unordered_map<std::string, std::vector<bool>> & guidance_triggered,
-  const rclcpp::Time & timestamp)
-{
-  if (guidance_triggered.empty()) {
-    return;
-  }
-
-  autoware_internal_debug_msgs::msg::StringStamped msg;
-  msg.stamp = timestamp;
-
-  std::vector<std::string> batch_entries;
-  size_t batch_size = 0;
-  for (const auto & [name, triggered_list] : guidance_triggered) {
-    batch_size = std::max(batch_size, triggered_list.size());
-  }
-
-  for (size_t b = 0; b < batch_size; ++b) {
-    std::string entry = "[" + std::to_string(b) + "]";
-    for (const auto & [name, triggered_list] : guidance_triggered) {
-      if (b < triggered_list.size() && triggered_list[b]) {
-        entry += "\n  - " + name;
-      }
-    }
-    batch_entries.push_back(entry);
-  }
-
-  std::string result;
-  result += "Guidance Status:\n";
-  for (size_t i = 0; i < batch_entries.size(); ++i) {
-    if (i > 0) {
-      result += '\n';
-    }
-    result += batch_entries[i];
-  }
-  msg.data = result;
-
-  pub_guidance_status_->publish(msg);
-}
-
-void DiffusionPlanner::publish_mppi_enabled(bool enabled)
-{
-  std_msgs::msg::Bool msg;
-  msg.data = enabled;
-  pub_mppi_enabled_->publish(msg);
-}
-
-void DiffusionPlanner::publish_mppi_debug(
-  const autoware::mppi_optimizer::FirstOrderDubinsMppiDebug & debug, const std::string & frame_id,
-  const rclcpp::Time & stamp)
-{
-  auto reference = debug.reference_trajectory;
-  auto optimized = debug.optimized_trajectory;
-  reference.header.stamp = stamp;
-  reference.header.frame_id = frame_id;
-  optimized.header = reference.header;
-
-  pub_mppi_reference_trajectory_->publish(reference);
-  pub_mppi_optimized_trajectory_->publish(optimized);
 }
 
 void DiffusionPlanner::publish_planning_factor(const Trajectory & trajectory)
@@ -822,7 +579,6 @@ void DiffusionPlanner::publish_planning_factor(const Trajectory & trajectory)
 
 void DiffusionPlanner::on_map(const HADMapBin::ConstSharedPtr map_msg)
 {
-  lanelet_map_msg_ = *map_msg;
   lanelet_map_ptr_ = autoware::experimental::lanelet2_utils::from_autoware_map_msgs(*map_msg);
   core_->set_map(lanelet_map_ptr_);
 }

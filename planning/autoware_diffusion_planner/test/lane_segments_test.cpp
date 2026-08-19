@@ -14,9 +14,8 @@
 
 #include "lane_segments_test.hpp"
 
-#include "autoware/diffusion_planner/conversion/lanelet.hpp"
 #include "autoware/diffusion_planner/dimensions.hpp"
-#include "autoware/diffusion_planner/preprocessing/lane_segments.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/map.hpp"
 
 #include <Eigen/Dense>
 #include <autoware_lanelet2_extension/utility/message_conversion.hpp>
@@ -66,28 +65,28 @@ TEST_F(LaneSegmentsTest, LaneSegmentContextFunctionality)
   /////////
   const std::vector<int64_t> segment_indices = context.select_route_segment_indices(
     route, center_x, center_y, center_z, NUM_SEGMENTS_IN_ROUTE);
-  const std::pair<std::vector<float>, std::vector<float>> result =
-    context.create_tensor_data_from_indices(
-      transform_matrix, traffic_light_id_map, segment_indices, NUM_SEGMENTS_IN_ROUTE);
+  const auto [lanes, lane_types, speed_limits] = context.create_tensor_data_from_indices(
+    transform_matrix, segment_indices, NUM_SEGMENTS_IN_ROUTE);
 
   ////////////
   // Assert //
   ////////////
   // Check that we get valid results
-  EXPECT_FALSE(result.first.empty()) << "Route segments should not be empty";
-  EXPECT_FALSE(result.second.empty()) << "Speed limits should not be empty";
+  EXPECT_FALSE(lanes.empty()) << "Route segments should not be empty";
+  EXPECT_FALSE(lane_types.empty()) << "Route lane types should not be empty";
+  EXPECT_FALSE(speed_limits.empty()) << "Speed limits should not be empty";
 
   // Check that route segment values are reasonable (not NaN or infinite)
-  for (size_t i = 0; i < result.first.size(); ++i) {
-    EXPECT_FALSE(std::isnan(result.first[i]))
+  for (size_t i = 0; i < lanes.size(); ++i) {
+    EXPECT_FALSE(std::isnan(lanes.flat(i)))
       << "Route segment value should not be NaN at index " << i;
-    EXPECT_FALSE(std::isinf(result.first[i]))
+    EXPECT_FALSE(std::isinf(lanes.flat(i)))
       << "Route segment value should not be infinite at index " << i;
   }
 
   // Check that speed limit values are reasonable (allow NaN but check for inf)
-  for (size_t i = 0; i < result.second.size(); ++i) {
-    EXPECT_FALSE(std::isinf(result.second[i]))
+  for (size_t i = 0; i < speed_limits.size(); ++i) {
+    EXPECT_FALSE(std::isinf(speed_limits.flat(i)))
       << "Speed limit value should not be infinite at index " << i;
   }
 }

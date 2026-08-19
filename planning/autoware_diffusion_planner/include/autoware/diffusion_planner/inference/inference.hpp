@@ -20,8 +20,6 @@
 #include <tl/expected.hpp>
 
 #include <string>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace autoware::diffusion_planner
@@ -29,12 +27,9 @@ namespace autoware::diffusion_planner
 
 struct InferenceOutput
 {
-  std::pair<std::vector<float>, std::vector<float>> outputs;
-  std::vector<float> denoising_predictions;
-  std::vector<float> denoising_timesteps;
+  std::vector<float> trajectory;
   double inference_time_ms{0.0};
   bool is_denormalized{false};
-  std::unordered_map<std::string, std::vector<bool>> guidance_triggered;
 };
 
 using InferenceResult = tl::expected<InferenceOutput, std::string>;

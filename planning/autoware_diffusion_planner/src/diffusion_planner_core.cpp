@@ -14,15 +14,11 @@
 
 #include "autoware/diffusion_planner/diffusion_planner_core.hpp"
 
-#include "autoware/diffusion_planner/conversion/agent.hpp"
+#include "autoware/diffusion_planner/constants.hpp"
 #include "autoware/diffusion_planner/dimensions.hpp"
-#include "autoware/diffusion_planner/inference/guidance/centerline_guidance.hpp"
-#include "autoware/diffusion_planner/inference/guidance/start_guidance.hpp"
-#include "autoware/diffusion_planner/inference/guidance/stop_guidance.hpp"
-#include "autoware/diffusion_planner/inference/multi_step_inference.hpp"
 #include "autoware/diffusion_planner/inference/single_step_inference.hpp"
 #include "autoware/diffusion_planner/postprocessing/postprocessing_utils.hpp"
-#include "autoware/diffusion_planner/preprocessing/preprocessing_utils.hpp"
+#include "autoware/diffusion_planner/preprocessing/items/initial_noise.hpp"
 #include "autoware/diffusion_planner/utils/utils.hpp"
 
 #ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ONNXRUNTIME
@@ -75,90 +71,32 @@ DiffusionPlannerCore::DiffusionPlannerCore(
   const DiffusionPlannerParams & params, const VehicleInfo & vehicle_info)
 : params_(params), vehicle_spec_(vehicle_info)
 {
-  sync_turn_indicator_managers();
-}
-
-void DiffusionPlannerCore::sync_turn_indicator_managers()
-{
-  const auto hold_duration = rclcpp::Duration::from_seconds(params_.turn_indicator_hold_duration);
-  const float keep_offset = params_.turn_indicator_keep_offset;
-  const size_t desired = static_cast<size_t>(std::max<int>(params_.batch_size, 1));
-
-  if (turn_indicator_managers_.size() > desired) {
-    turn_indicator_managers_.erase(
-      turn_indicator_managers_.begin() + static_cast<std::ptrdiff_t>(desired),
-      turn_indicator_managers_.end());
+  if (
+    params_.batch_size < 1 || params_.batch_size > 2 ||
+    params_.noise_scale_list.size() != static_cast<size_t>(params_.batch_size)) {
+    throw std::invalid_argument(
+      "batch_size must be 1 or 2 and noise_scale must contain exactly batch_size values");
   }
-  while (turn_indicator_managers_.size() < desired) {
-    turn_indicator_managers_.emplace_back(hold_duration, keep_offset);
+#ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+  if (params_.trajectory_optimization.enable) {
+    trajectory_optimizer_ = std::make_unique<optimization::TrajectoryOptimizer>(
+      params_.trajectory_optimization, vehicle_info, static_cast<size_t>(params_.batch_size));
   }
-  for (auto & manager : turn_indicator_managers_) {
-    manager.set_hold_duration(hold_duration);
-    manager.set_keep_offset(keep_offset);
-  }
+#endif
 }
 
 void DiffusionPlannerCore::load_model()
 {
-  last_agent_poses_map_.clear();
   diffusion_planner_inference_.reset();
-  utils::check_weight_version(params_.args_path);
-  observation_normalization_ = utils::load_observation_normalization(params_.args_path);
-  state_normalization_ = utils::load_state_normalization(params_.args_path);
-
-  // Initialize guidance modules
-  StartGuidanceConfig start_guidance_config;
-  start_guidance_config.reference_distance_m =
-    static_cast<float>(params_.start_guidance_reference_distance_m);
-  start_guidance_config.max_scale = static_cast<float>(params_.start_guidance_max_scale);
-  start_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-  start_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-  start_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-  start_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
-  start_guidance_ = std::make_shared<StartGuidance>(start_guidance_config);
-  start_guidance_->set_enabled(start_guidance_enabled_);
-
-  StopGuidanceConfig stop_guidance_config;
-  stop_guidance_config.stop_acceleration_mps2 =
-    static_cast<float>(params_.stop_guidance_stop_acceleration_mps2);
-  stop_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-  stop_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-  stop_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-  stop_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
-  stop_guidance_ = std::make_shared<StopGuidance>(stop_guidance_config);
-  stop_guidance_->set_enabled(stop_guidance_enabled_);
-
-  CenterlineGuidanceConfig centerline_guidance_config;
-  centerline_guidance_config.start_time_s =
-    static_cast<float>(params_.centerline_guidance_start_time_s);
-  centerline_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-  centerline_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-  centerline_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-  centerline_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
-  centerline_guidance_ = std::make_shared<CenterlineGuidance>(centerline_guidance_config);
-  centerline_guidance_->set_enabled(centerline_guidance_enabled_);
-
-  std::unordered_map<std::string, std::shared_ptr<Guidance>> guidances{
-    {"start", start_guidance_}, {"stop", stop_guidance_}, {"centerline", centerline_guidance_}};
-  if (params_.backend == "tensorrt" && params_.model_type == "single_step") {
+  if (params_.backend == "tensorrt") {
     diffusion_planner_inference_ = std::make_unique<SingleStepInference>(
-      params_.single_step_model_path, params_.plugins_path, params_.batch_size,
-      params_.trt_precision, params_.use_cuda_graph);
-  } else if (params_.backend == "tensorrt" && params_.model_type == "multi_step") {
-    diffusion_planner_inference_ = std::make_unique<MultiStepInference>(
-      params_.encoder_model_path, params_.decoder_model_path, params_.turn_indicator_model_path,
-      params_.plugins_path, params_.batch_size, params_.trt_precision, params_.use_cuda_graph,
-      params_.dpm_solver_steps, std::move(guidances));
+      params_.model_path, params_.plugins_path, params_.batch_size, params_.trt_precision,
+      params_.use_cuda_graph);
 #ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ONNXRUNTIME
-  } else if (is_onnxruntime_backend(params_.backend) && params_.model_type == "single_step") {
+  } else if (is_onnxruntime_backend(params_.backend)) {
     diffusion_planner_inference_ = std::make_unique<OnnxruntimeSingleStepInference>(
-      params_.single_step_model_path, onnxruntime_execution_provider_from_backend(params_.backend),
-      params_.plugins_path, params_.batch_size);
-  } else if (is_onnxruntime_backend(params_.backend) && params_.model_type == "multi_step") {
-    diffusion_planner_inference_ = std::make_unique<OnnxruntimeMultiStepInference>(
-      params_.encoder_model_path, params_.decoder_model_path, params_.turn_indicator_model_path,
-      onnxruntime_execution_provider_from_backend(params_.backend), params_.plugins_path,
-      params_.batch_size, params_.dpm_solver_steps, std::move(guidances));
+      params_.model_path, onnxruntime_execution_provider_from_backend(params_.backend),
+      params_.plugins_path);
 #endif
   } else {
     if (params_.backend != "tensorrt") {
@@ -166,74 +104,19 @@ void DiffusionPlannerCore::load_model()
         "Unsupported model.backend '" + params_.backend +
         "'. ONNX Runtime support is not available in this build.");
     }
-    throw std::invalid_argument(
-      "Unsupported model.type '" + params_.model_type +
-      "'. Expected 'single_step' or 'multi_step'.");
+    throw std::invalid_argument("Unsupported model.backend '" + params_.backend + "'.");
   }
 }
 
 void DiffusionPlannerCore::update_params(const DiffusionPlannerParams & params)
 {
+  if (
+    params.batch_size < 1 || params.batch_size > 2 ||
+    params.noise_scale_list.size() != static_cast<size_t>(params.batch_size)) {
+    throw std::invalid_argument(
+      "batch_size must be 1 or 2 and noise_scale must contain exactly batch_size values");
+  }
   params_ = params;
-  sync_turn_indicator_managers();
-  if (start_guidance_) {
-    StartGuidanceConfig start_guidance_config;
-    start_guidance_config.reference_distance_m =
-      static_cast<float>(params_.start_guidance_reference_distance_m);
-    start_guidance_config.max_scale = static_cast<float>(params_.start_guidance_max_scale);
-    start_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-    start_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-    start_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-    start_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
-    start_guidance_->set_config(start_guidance_config);
-    start_guidance_->set_enabled(start_guidance_enabled_);
-  }
-  if (stop_guidance_) {
-    StopGuidanceConfig stop_guidance_config;
-    stop_guidance_config.stop_acceleration_mps2 =
-      static_cast<float>(params_.stop_guidance_stop_acceleration_mps2);
-    stop_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-    stop_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-    stop_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-    stop_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
-    stop_guidance_->set_config(stop_guidance_config);
-    stop_guidance_->set_enabled(stop_guidance_enabled_);
-  }
-  if (centerline_guidance_) {
-    CenterlineGuidanceConfig centerline_guidance_config;
-    centerline_guidance_config.start_time_s =
-      static_cast<float>(params_.centerline_guidance_start_time_s);
-    centerline_guidance_config.x_mean = static_cast<float>(state_normalization_.first.at(0));
-    centerline_guidance_config.x_std = static_cast<float>(state_normalization_.second.at(0));
-    centerline_guidance_config.y_mean = static_cast<float>(state_normalization_.first.at(1));
-    centerline_guidance_config.y_std = static_cast<float>(state_normalization_.second.at(1));
-    centerline_guidance_->set_config(centerline_guidance_config);
-    centerline_guidance_->set_enabled(centerline_guidance_enabled_);
-  }
-}
-
-void DiffusionPlannerCore::set_start_guidance_enabled(const bool enabled)
-{
-  start_guidance_enabled_ = enabled;
-  if (start_guidance_) {
-    start_guidance_->set_enabled(enabled);
-  }
-}
-
-void DiffusionPlannerCore::set_stop_guidance_enabled(const bool enabled)
-{
-  stop_guidance_enabled_ = enabled;
-  if (stop_guidance_) {
-    stop_guidance_->set_enabled(enabled);
-  }
-}
-
-void DiffusionPlannerCore::set_centerline_guidance_enabled(const bool enabled)
-{
-  centerline_guidance_enabled_ = enabled;
-  if (centerline_guidance_) {
-    centerline_guidance_->set_enabled(enabled);
-  }
 }
 
 void DiffusionPlannerCore::set_map(
@@ -243,255 +126,121 @@ void DiffusionPlannerCore::set_map(
     lanelet_map_ptr, params_.line_string_max_step_m);
 }
 
-std::optional<FrameContext> DiffusionPlannerCore::create_frame_context(
-  const std::shared_ptr<const Odometry> & ego_kinematic_state,
-  const std::shared_ptr<const AccelWithCovarianceStamped> & ego_acceleration,
-  const std::shared_ptr<const TrackedObjects> & objects,
+DiffusionPlannerCore::BufferUpdateResult DiffusionPlannerCore::update_buffer(
+  const std::vector<std::shared_ptr<const Odometry>> & ego_kinematic_states,
+  const std::vector<std::shared_ptr<const TrackedObjects>> & objects,
   const std::vector<std::shared_ptr<const autoware_perception_msgs::msg::TrafficLightGroupArray>> &
     traffic_signals,
-  const std::shared_ptr<const TurnIndicatorsReport> & turn_indicators,
-  const LaneletRoute::ConstSharedPtr & route_ptr, const rclcpp::Time & current_time)
+  const std::vector<std::shared_ptr<const TurnIndicatorsReport>> & turn_indicators,
+  const LaneletRoute::ConstSharedPtr & route_ptr)
 {
-  route_ptr_ = (!route_ptr_ || route_ptr) ? route_ptr : route_ptr_;
-
-  TrackedObjects empty_object_list;
-  auto effective_objects = objects;
-
-  if (params_.ignore_neighbors) {
-    effective_objects = std::make_shared<TrackedObjects>(empty_object_list);
+  if (route_ptr) {
+    route_ptr_ = route_ptr;
+  }
+  for (const auto & msg : ego_kinematic_states) {
+    if (msg) {
+      ego_history_.push_back(*msg);
+    }
+  }
+  for (const auto & msg : turn_indicators) {
+    if (msg) {
+      turn_indicators_history_.push_back(*msg);
+    }
+  }
+  for (const auto & msg : objects) {
+    if (msg) {
+      objects_history_.push_back(*msg);
+    }
+  }
+  for (const auto & msg : traffic_signals) {
+    if (msg) {
+      traffic_signals_history_.push_back(*msg);
+    }
   }
 
-  if (!effective_objects || !ego_kinematic_state || !ego_acceleration || !turn_indicators) {
-    return std::nullopt;
+  std::vector<std::string> missing_inputs;
+  if (ego_history_.empty()) {
+    missing_inputs.emplace_back("ego kinematic state");
   }
-
+  if (objects_history_.empty()) {
+    missing_inputs.emplace_back("tracked objects");
+  }
   if (!route_ptr_) {
-    return std::nullopt;
+    missing_inputs.emplace_back("route");
+  }
+  if (turn_indicators_history_.empty()) {
+    missing_inputs.emplace_back("turn indicators");
+  }
+  if (!missing_inputs.empty()) {
+    std::string error{"Missing required input: "};
+    for (size_t index = 0; index < missing_inputs.size(); ++index) {
+      if (index > 0) {
+        error += ", ";
+      }
+      error += missing_inputs[index];
+    }
+    return tl::unexpected(std::move(error));
   }
 
-  Odometry kinematic_state = *ego_kinematic_state;
-  if (params_.shift_x) {
-    kinematic_state.pose.pose =
-      utils::shift_x(kinematic_state.pose.pose, vehicle_spec_.base_link_to_center);
-  }
+  const Eigen::Matrix4d map_to_ego_transform =
+    utils::inverse(utils::pose_to_matrix4d(ego_history_.back().pose.pose));
+  selected_agents_ = preprocess::select_current_agents(
+    objects_history_.msgs(), frame_time(), map_to_ego_transform, MAX_NUM_NEIGHBORS);
 
-  // Get transforms
-  const geometry_msgs::msg::Pose & pose_base_link = kinematic_state.pose.pose;
-  const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(pose_base_link);
-  const Eigen::Matrix4d map_to_ego_transform = utils::inverse(ego_to_map_transform);
-
-  // Update ego history
-  ego_history_.push_back(kinematic_state);
-  if (ego_history_.size() > static_cast<size_t>(EGO_HISTORY_SHAPE[1])) {
-    ego_history_.pop_front();
-  }
-
-  // Update turn indicators history
-  turn_indicators_history_.push_back(*turn_indicators);
-  if (turn_indicators_history_.size() > static_cast<size_t>(TURN_INDICATORS_SHAPE[1])) {
-    turn_indicators_history_.pop_front();
-  }
-
-  // Update neighbor agent data
-  agent_data_.update_histories(*effective_objects);
-  const auto processed_neighbor_histories =
-    agent_data_.transformed_and_trimmed_histories(map_to_ego_transform, NEIGHBOR_SHAPE[1]);
-
-  // Update traffic light map
-  const auto & traffic_light_msg_timeout_s = params_.traffic_light_group_msg_timeout_seconds;
-  preprocess::process_traffic_signals(
-    traffic_signals, traffic_light_id_map_, current_time, traffic_light_msg_timeout_s);
-
-  // Create frame context
-  const rclcpp::Time frame_time(ego_kinematic_state->header.stamp);
-  const FrameContext frame_context{
-    *ego_kinematic_state, *ego_acceleration, ego_to_map_transform, processed_neighbor_histories,
-    frame_time};
-
-  return frame_context;
+  return preprocess::FrameInputs{
+    frame_time(),
+    ego_history_.msgs(),
+    turn_indicators_history_.msgs(),
+    objects_history_.msgs(),
+    traffic_signals_history_.msgs(),
+    *route_ptr_};
 }
 
-InputDataMap DiffusionPlannerCore::create_input_data(const FrameContext & frame_context)
+preprocess::InputDataResult DiffusionPlannerCore::create_input_data(
+  const preprocess::FrameInputs & frame_inputs) const
 {
+  if (!lane_segment_context_) {
+    return tl::unexpected(std::string{"Map context is unavailable"});
+  }
+
+  const preprocess::InputBuilderParams builder_params{
+    params_.traffic_light_group_msg_timeout_seconds};
+  auto single_input_result = preprocess::create_input_data_map(
+    frame_inputs, *lane_segment_context_, vehicle_spec_, builder_params);
+  if (!single_input_result) {
+    return tl::unexpected(single_input_result.error());
+  }
+  InputDataMap single_input_data_map = std::move(single_input_result.value());
+
+  // Replicate for batch
   InputDataMap input_data_map;
-
-  if (stop_guidance_) {
-    const auto & linear = frame_context.ego_kinematic_state.twist.twist.linear;
-    stop_guidance_->set_current_speed_mps(static_cast<float>(std::hypot(linear.x, linear.y)));
+  for (auto & [key, value] : single_input_data_map) {
+    input_data_map[key] = utils::replicate_for_batch(value, params_.batch_size);
   }
 
-  const geometry_msgs::msg::Pose & pose_center =
-    params_.shift_x
-      ? utils::shift_x(
-          frame_context.ego_kinematic_state.pose.pose, vehicle_spec_.base_link_to_center)
-      : frame_context.ego_kinematic_state.pose.pose;
-  const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(pose_center);
-  const Eigen::Matrix4d map_to_ego_transform = utils::inverse(ego_to_map_transform);
-  const auto & center_x = static_cast<float>(pose_center.position.x);
-  const auto & center_y = static_cast<float>(pose_center.position.y);
-  const auto & center_z = static_cast<float>(pose_center.position.z);
-
-  // random sample trajectories
-  int64_t delay_step = 0;
-  {
-    const int64_t copy_steps = std::clamp<int64_t>(params_.delay_step, 0, OUTPUT_T / 2);
-    const bool has_previous_output = !last_agent_poses_map_.empty();
-
-    for (int64_t b = 0; b < params_.batch_size; b++) {
-      std::vector<float> sampled_trajectories =
-        preprocess::create_sampled_trajectories(params_.temperature_list[b]);
-
-      if (has_previous_output) {
-        constexpr int64_t agent_idx = 0;
-        delay_step = copy_steps;
-        for (int64_t t = 0; t <= copy_steps; ++t) {
-          const size_t dst_base = agent_idx * (OUTPUT_T + 1) * POSE_DIM + (t)*POSE_DIM;
-          const Eigen::Matrix4d pose_ego =
-            map_to_ego_transform * last_agent_poses_map_[b][agent_idx][t];
-          const float shifted_x = static_cast<float>(pose_ego(0, 3));
-          const float shifted_y = static_cast<float>(pose_ego(1, 3));
-          const auto [shifted_cos, shifted_sin] =
-            utils::rotation_matrix_to_cos_sin(pose_ego.block<3, 3>(0, 0));
-
-          sampled_trajectories[dst_base + 0] = (shifted_x - 10.0f) / 20.0f;
-          sampled_trajectories[dst_base + 1] = shifted_y / 20.0f;
-          sampled_trajectories[dst_base + 2] = shifted_cos;
-          sampled_trajectories[dst_base + 3] = shifted_sin;
-        }
-      }
-
-      input_data_map["sampled_trajectories"].insert(
-        input_data_map["sampled_trajectories"].end(), sampled_trajectories.begin(),
-        sampled_trajectories.end());
-    }
+  // Initial Gaussian noise for the sampler embedded in the ONNX graph.
+  std::vector<size_t> sampled_shape;
+  std::transform(
+    INITIAL_NOISE_SHAPE.begin(), INITIAL_NOISE_SHAPE.end(), std::back_inserter(sampled_shape),
+    [](const int64_t dim) { return static_cast<size_t>(dim); });
+  sampled_shape.front() = static_cast<size_t>(params_.batch_size);
+  xt::xarray<float> sampled_tensor = xt::xarray<float>::from_shape(sampled_shape);
+  const size_t single_sample_size = sampled_tensor.size() / sampled_shape.front();
+  for (int64_t b = 0; b < params_.batch_size; b++) {
+    const xt::xarray<float> initial_noise =
+      preprocess::create_initial_noise(params_.noise_scale_list[b]);
+    std::copy(
+      initial_noise.begin(), initial_noise.end(),
+      sampled_tensor.begin() + static_cast<std::ptrdiff_t>(b * single_sample_size));
   }
-
-  // Ego history
-  {
-    const std::optional<rclcpp::Time> reference_time =
-      params_.use_time_interpolation ? std::make_optional(frame_context.frame_time) : std::nullopt;
-    const std::vector<float> single_ego_agent_past = preprocess::create_ego_agent_past(
-      ego_history_, EGO_HISTORY_SHAPE[1], map_to_ego_transform, reference_time);
-    input_data_map["ego_agent_past"] =
-      utils::replicate_for_batch(single_ego_agent_past, params_.batch_size);
-  }
-  // Ego state
-  {
-    const auto ego_current_state = preprocess::create_ego_current_state(
-      frame_context.ego_kinematic_state, frame_context.ego_acceleration,
-      static_cast<float>(vehicle_spec_.wheel_base));
-    input_data_map["ego_current_state"] =
-      utils::replicate_for_batch(ego_current_state, params_.batch_size);
-  }
-  // Agent data on ego reference frame
-  {
-    const auto neighbor_agents_past = flatten_histories_to_vector(
-      frame_context.ego_centric_neighbor_histories, MAX_NUM_NEIGHBORS, INPUT_T + 1);
-    input_data_map["neighbor_agents_past"] =
-      utils::replicate_for_batch(neighbor_agents_past, params_.batch_size);
-  }
-  // Static objects
-  // TODO(Daniel): add static objects
-  {
-    std::vector<int64_t> single_batch_shape(
-      STATIC_OBJECTS_SHAPE.begin() + 1, STATIC_OBJECTS_SHAPE.end());
-    auto static_objects_data = utils::create_float_data(single_batch_shape, 0.0f);
-    input_data_map["static_objects"] =
-      utils::replicate_for_batch(static_objects_data, params_.batch_size);
-  }
-
-  // map data on ego reference frame
-  {
-    const std::vector<int64_t> segment_indices = lane_segment_context_->select_lane_segment_indices(
-      map_to_ego_transform, center_x, center_y, NUM_SEGMENTS_IN_LANE);
-    const auto [lanes, lanes_speed_limit] = lane_segment_context_->create_tensor_data_from_indices(
-      map_to_ego_transform, traffic_light_id_map_, segment_indices, NUM_SEGMENTS_IN_LANE);
-    input_data_map["lanes"] = utils::replicate_for_batch(lanes, params_.batch_size);
-    input_data_map["lanes_speed_limit"] =
-      utils::replicate_for_batch(lanes_speed_limit, params_.batch_size);
-  }
-
-  // route data on ego reference frame
-  {
-    const std::vector<int64_t> segment_indices =
-      lane_segment_context_->select_route_segment_indices(
-        *route_ptr_, center_x, center_y, center_z, NUM_SEGMENTS_IN_ROUTE);
-    const auto [route_lanes, route_lanes_speed_limit] =
-      lane_segment_context_->create_tensor_data_from_indices(
-        map_to_ego_transform, traffic_light_id_map_, segment_indices, NUM_SEGMENTS_IN_ROUTE);
-    input_data_map["route_lanes"] = utils::replicate_for_batch(route_lanes, params_.batch_size);
-    if (centerline_guidance_) {
-      centerline_guidance_->set_route_lanes(input_data_map["route_lanes"]);
-    }
-    input_data_map["route_lanes_speed_limit"] =
-      utils::replicate_for_batch(route_lanes_speed_limit, params_.batch_size);
-  }
-
-  // polygons
-  {
-    const auto & polygons =
-      lane_segment_context_->create_polygon_tensor(map_to_ego_transform, center_x, center_y);
-    input_data_map["polygons"] = utils::replicate_for_batch(polygons, params_.batch_size);
-  }
-
-  // line strings
-  {
-    const auto & line_strings =
-      lane_segment_context_->create_line_string_tensor(map_to_ego_transform, center_x, center_y);
-    input_data_map["line_strings"] = utils::replicate_for_batch(line_strings, params_.batch_size);
-  }
-
-  // goal pose
-  {
-    const auto & goal_pose = route_ptr_->goal_pose;
-
-    // Convert goal pose to 4x4 transformation matrix
-    const Eigen::Matrix4d goal_pose_map_4x4 = utils::pose_to_matrix4d(goal_pose);
-
-    // Transform to ego frame
-    const Eigen::Matrix4d goal_pose_ego_4x4 = map_to_ego_transform * goal_pose_map_4x4;
-
-    // Extract relative position
-    const float x = goal_pose_ego_4x4(0, 3);
-    const float y = goal_pose_ego_4x4(1, 3);
-
-    // Extract heading as cos/sin from rotation matrix
-    const auto [cos_yaw, sin_yaw] =
-      utils::rotation_matrix_to_cos_sin(goal_pose_ego_4x4.block<3, 3>(0, 0));
-
-    std::vector<float> single_goal_pose = {x, y, cos_yaw, sin_yaw};
-    input_data_map["goal_pose"] = utils::replicate_for_batch(single_goal_pose, params_.batch_size);
-  }
-
-  // ego shape
-  {
-    const std::vector<float> single_ego_shape = {
-      static_cast<float>(vehicle_spec_.wheel_base),
-      static_cast<float>(vehicle_spec_.vehicle_length),
-      static_cast<float>(vehicle_spec_.vehicle_width)};
-    input_data_map["ego_shape"] = utils::replicate_for_batch(single_ego_shape, params_.batch_size);
-  }
-
-  // turn indicators
-  {
-    // copy from back to front, and use the front value for padding if not enough history
-    std::vector<float> single_turn_indicators(INPUT_T + 1, 0.0f);
-    for (int64_t t = 0; t < INPUT_T + 1; ++t) {
-      const int64_t index = std::max(
-        static_cast<int64_t>(turn_indicators_history_.size()) - 1 - t, static_cast<int64_t>(0));
-      single_turn_indicators[INPUT_T - t] = turn_indicators_history_[index].report;
-    }
-    input_data_map["turn_indicators"] =
-      utils::replicate_for_batch(single_turn_indicators, params_.batch_size);
-  }
-
-  // control delay
-  {
-    const std::vector<float> single_delay = {static_cast<float>(delay_step)};
-    input_data_map["delay"] = utils::replicate_for_batch(single_delay, params_.batch_size);
-  }
+  input_data_map["initial_noise"] = std::move(sampled_tensor);
 
   return input_data_map;
+}
+
+rclcpp::Time DiffusionPlannerCore::frame_time() const
+{
+  return rclcpp::Time(ego_history_.back().header.stamp);
 }
 
 InferenceResult DiffusionPlannerCore::run_inference(const InputDataMap & input_data_map)
@@ -503,49 +252,46 @@ InferenceResult DiffusionPlannerCore::run_inference(const InputDataMap & input_d
 }
 
 PlannerOutput DiffusionPlannerCore::create_planner_output(
-  const InferenceOutput & inference_output, const FrameContext & frame_context,
-  const rclcpp::Time & timestamp, const UUID & generator_uuid)
+  const InferenceOutput & inference_output, const rclcpp::Time & timestamp,
+  const UUID & generator_uuid, const std::optional<double> & current_steering_angle_rad)
 {
-  const auto & [raw_predictions, turn_indicator_logit] = inference_output.outputs;
+  // Derive the frame state from the raw message buffers
+  const Odometry & kinematic_state = ego_history_.back();
+  const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(kinematic_state.pose.pose);
+
+  const auto & raw_predictions = inference_output.trajectory;
   const std::vector<float> denormalized_predictions =
-    inference_output.is_denormalized
-      ? raw_predictions
-      : postprocess::denormalize_prediction(raw_predictions, state_normalization_);
-  std::vector<float> denormalized_denoising_predictions;
-  if (!inference_output.denoising_predictions.empty()) {
-    denormalized_denoising_predictions =
-      inference_output.is_denormalized
-        ? inference_output.denoising_predictions
-        : postprocess::denormalize_prediction(
-            inference_output.denoising_predictions, state_normalization_, true);
-  }
+    inference_output.is_denormalized ? raw_predictions
+                                     : postprocess::denormalize_prediction(raw_predictions);
 
   const auto agent_poses =
-    postprocess::parse_predictions(denormalized_predictions, frame_context.ego_to_map_transform);
-  last_agent_poses_map_ = agent_poses;
-
-  const bool enable_force_stop =
-    frame_context.ego_kinematic_state.twist.twist.linear.x > std::numeric_limits<double>::epsilon();
+    postprocess::parse_predictions(denormalized_predictions, ego_to_map_transform);
 
   PlannerOutput output;
-  output.denoising_steps = postprocess::create_denoising_steps_message(
-    denormalized_denoising_predictions, inference_output.denoising_timesteps);
-
   const int64_t prev_report = turn_indicators_history_.empty()
                                 ? TurnIndicatorsReport::DISABLE
                                 : turn_indicators_history_.back().report;
 
   // Trajectory and CandidateTrajectories
   for (int i = 0; i < params_.batch_size; i++) {
-    auto trajectory = postprocess::create_ego_trajectory(
-      agent_poses, timestamp, frame_context.ego_kinematic_state.pose.pose.position, i,
-      params_.velocity_smoothing_window, enable_force_stop, params_.stopping_threshold);
+    auto trajectory = postprocess::create_ego_trajectory(agent_poses, timestamp, i);
 
-    if (params_.shift_x) {
-      for (auto & point : trajectory.points) {
-        point.pose = utils::shift_x(point.pose, -vehicle_spec_.base_link_to_center);
+#ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+    if (trajectory_optimizer_) {
+      auto optimization_result = trajectory_optimizer_->optimize(
+        trajectory, kinematic_state, current_steering_angle_rad, static_cast<size_t>(i));
+      if (i == 0) {
+        output.raw_trajectory = trajectory;
+        output.optimization_debug.attempted = true;
+        output.optimization_debug.optimized = optimization_result.optimized;
+        output.optimization_debug.solver_status = optimization_result.solver_status;
+        output.optimization_debug.solve_time_ms = optimization_result.solve_time_ms;
       }
+      trajectory = std::move(optimization_result.trajectory);
     }
+#else
+    (void)current_steering_angle_rad;
+#endif
 
     if (i == 0) {
       // Use the first trajectory as the main output trajectory
@@ -553,31 +299,27 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
     }
 
     // TurnIndicatorsCommand
-    const std::vector<float> single_turn_indicator_logit(
-      turn_indicator_logit.begin() + TURN_INDICATOR_OUTPUT_DIM * i,
-      turn_indicator_logit.begin() + TURN_INDICATOR_OUTPUT_DIM * (i + 1));
-    const TurnIndicatorsCommand turn_indicators_command =
-      turn_indicator_managers_.at(i).evaluate(single_turn_indicator_logit, timestamp, prev_report);
+    TurnIndicatorsCommand turn_indicators_command;
+    turn_indicators_command.stamp = timestamp;
+    turn_indicators_command.command = static_cast<uint8_t>(prev_report);
 
     if (i == 0) {
       // Publish the first trajectory's command on the standalone turn indicator topic.
       output.turn_indicators_command = turn_indicators_command;
     }
 
-    const auto candidate_trajectory = autoware_internal_planning_msgs::build<
-                                        autoware_internal_planning_msgs::msg::CandidateTrajectory>()
-                                        .header(trajectory.header)
-                                        .generator_id(generator_uuid)
-                                        .points(trajectory.points)
-                                        .turn_indicators_command(turn_indicators_command);
+    autoware_internal_planning_msgs::msg::CandidateTrajectory candidate_trajectory;
+    candidate_trajectory.header = trajectory.header;
+    candidate_trajectory.generator_id = generator_uuid;
+    candidate_trajectory.points = trajectory.points;
+    candidate_trajectory.turn_indicators_command = turn_indicators_command;
 
     std_msgs::msg::String generator_name_msg;
     generator_name_msg.data = std::string("DiffusionPlanner_batch_") + std::to_string(i);
 
-    const auto generator_info =
-      autoware_internal_planning_msgs::build<autoware_internal_planning_msgs::msg::GeneratorInfo>()
-        .generator_id(generator_uuid)
-        .generator_name(generator_name_msg);
+    autoware_internal_planning_msgs::msg::GeneratorInfo generator_info;
+    generator_info.generator_id = generator_uuid;
+    generator_info.generator_name = generator_name_msg;
 
     output.candidate_trajectories.candidate_trajectories.push_back(candidate_trajectory);
     output.candidate_trajectories.generator_info.push_back(generator_info);
@@ -586,33 +328,30 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
   // PredictedObjects
   // Use the first prediction as the main predicted objects
   constexpr int64_t batch_idx = 0;
-  output.predicted_objects = postprocess::create_predicted_objects(
-    agent_poses, frame_context.ego_centric_neighbor_histories, timestamp, batch_idx);
-
-  output.guidance_triggered = inference_output.guidance_triggered;
+  output.predicted_objects =
+    postprocess::create_predicted_objects(agent_poses, selected_agents_, timestamp, batch_idx);
 
   return output;
 }
 
 autoware_perception_msgs::msg::TrafficLightGroup
-DiffusionPlannerCore::get_first_traffic_light_on_route(const FrameContext & frame_context) const
+DiffusionPlannerCore::get_first_traffic_light_on_route() const
 {
-  if (!lane_segment_context_ || !route_ptr_) {
+  if (!lane_segment_context_ || !route_ptr_ || ego_history_.empty()) {
     return autoware_perception_msgs::msg::TrafficLightGroup{};
   }
 
-  const geometry_msgs::msg::Pose & pose_center =
-    params_.shift_x
-      ? utils::shift_x(
-          frame_context.ego_kinematic_state.pose.pose, vehicle_spec_.base_link_to_center)
-      : frame_context.ego_kinematic_state.pose.pose;
+  const geometry_msgs::msg::Pose & pose_center = ego_history_.back().pose.pose;
 
   const double center_x = pose_center.position.x;
   const double center_y = pose_center.position.y;
   const double center_z = pose_center.position.z;
 
+  const auto traffic_light_id_map = preprocess::create_traffic_signal_map(
+    traffic_signals_history_.msgs(), frame_time(), params_.traffic_light_group_msg_timeout_seconds);
+
   return lane_segment_context_->get_first_traffic_light_on_route(
-    *route_ptr_, center_x, center_y, center_z, traffic_light_id_map_);
+    *route_ptr_, center_x, center_y, center_z, traffic_light_id_map);
 }
 
 int64_t DiffusionPlannerCore::count_valid_elements(
@@ -627,14 +366,18 @@ int64_t DiffusionPlannerCore::count_valid_elements(
     return postprocess::count_valid_elements(
       input_data_map.at("route_lanes"), ROUTE_LANES_SHAPE[1], ROUTE_LANES_SHAPE[2],
       ROUTE_LANES_SHAPE[3], batch_idx);
-  } else if (data_key == "polygons") {
+  } else if (data_key == "intersection_area") {
     return postprocess::count_valid_elements(
-      input_data_map.at("polygons"), POLYGONS_SHAPE[1], POLYGONS_SHAPE[2], POLYGONS_SHAPE[3],
-      batch_idx);
-  } else if (data_key == "line_strings") {
+      input_data_map.at("intersection_area"), INTERSECTION_AREA_SHAPE[1],
+      INTERSECTION_AREA_SHAPE[2], INTERSECTION_AREA_SHAPE[3], batch_idx);
+  } else if (data_key == "stop_lines") {
     return postprocess::count_valid_elements(
-      input_data_map.at("line_strings"), LINE_STRINGS_SHAPE[1], LINE_STRINGS_SHAPE[2],
-      LINE_STRINGS_SHAPE[3], batch_idx);
+      input_data_map.at("stop_lines"), STOP_LINES_SHAPE[1], STOP_LINES_SHAPE[2],
+      STOP_LINES_SHAPE[3], batch_idx);
+  } else if (data_key == "road_borders") {
+    return postprocess::count_valid_elements(
+      input_data_map.at("road_borders"), ROAD_BORDERS_SHAPE[1], ROAD_BORDERS_SHAPE[2],
+      ROAD_BORDERS_SHAPE[3], batch_idx);
   } else if (data_key == "neighbor_agents_past") {
     return postprocess::count_valid_elements(
       input_data_map.at("neighbor_agents_past"), NEIGHBOR_SHAPE[1], NEIGHBOR_SHAPE[2],

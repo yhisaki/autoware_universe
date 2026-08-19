@@ -15,12 +15,8 @@
 #ifndef AUTOWARE__DIFFUSION_PLANNER__DIFFUSION_PLANNER_NODE_HPP_
 #define AUTOWARE__DIFFUSION_PLANNER__DIFFUSION_PLANNER_NODE_HPP_
 
-#include "autoware/avoidance_target_detector/boundary.hpp"
-#include "autoware/avoidance_target_detector/object_filtering.hpp"
 #include "autoware/diffusion_planner/diffusion_planner_core.hpp"
-#include "autoware/diffusion_planner/mppi_utils.hpp"
 #include "autoware/diffusion_planner/utils/planning_factor_utils.hpp"
-#include "autoware/mppi_optimizer/first_order_dubins_mppi_interface.hpp"
 
 #include <autoware/lanelet2_utils/conversion.hpp>
 #include <autoware/planning_factor_interface/planning_factor_interface.hpp>
@@ -36,7 +32,6 @@
 #include <rclcpp/timer.hpp>
 
 #include <autoware_internal_debug_msgs/msg/float64_stamped.hpp>
-#include <autoware_internal_debug_msgs/msg/string_stamped.hpp>
 #include <autoware_internal_planning_msgs/msg/candidate_trajectories.hpp>
 #include <autoware_map_msgs/msg/lanelet_map_bin.hpp>
 #include <autoware_perception_msgs/msg/predicted_objects.hpp>
@@ -44,10 +39,8 @@
 #include <autoware_planning_msgs/msg/trajectory.hpp>
 #include <autoware_vehicle_msgs/msg/steering_report.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_command.hpp>
-#include <std_msgs/msg/bool.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/float64.hpp>
-#include <std_srvs/srv/set_bool.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include <memory>
@@ -69,7 +62,6 @@ using autoware_internal_planning_msgs::msg::PlanningFactor;
 using autoware_utils_diagnostics::DiagnosticsInterface;
 using geometry_msgs::msg::Pose;
 using rcl_interfaces::msg::SetParametersResult;
-using std_srvs::srv::SetBool;
 using unique_identifier_msgs::msg::UUID;
 using visualization_msgs::msg::MarkerArray;
 
@@ -140,8 +132,7 @@ private:
    *
    * Updates the normalization_map_ and diffusion_planner_inference_ member variables.
    *
-   * @throws std::runtime_error if args_path or model paths are invalid, if the
-   *         model version is incompatible, or if TensorRT engine setup fails.
+   * @throws std::runtime_error if the model path is invalid or engine setup fails.
    */
   void load_model();
 
@@ -169,7 +160,7 @@ private:
    * @brief Publish the first traffic light on the route (from ego forward) for debug.
    * @param frame_context Context of the current frame (ego pose).
    */
-  void publish_first_traffic_light_on_route(const FrameContext & frame_context) const;
+  void publish_first_traffic_light_on_route() const;
 
   /**
    * @brief Publish planning factors (stop/slowdown) derived from the trajectory.
@@ -177,46 +168,12 @@ private:
    */
   void publish_planning_factor(const Trajectory & trajectory);
 
-  void publish_mppi_debug(
-    const autoware::mppi_optimizer::FirstOrderDubinsMppiDebug & debug, const std::string & frame_id,
-    const rclcpp::Time & stamp);
-
-  /** Publish whether MPPI is currently applied to the output trajectory. */
-  void publish_mppi_enabled(bool enabled);
-
-  /**
-   * @brief Publish guidance triggered status as a debug message.
-   * @param guidance_triggered Map of guidance name to triggered flags per batch.
-   * @param timestamp Timestamp of the current frame.
-   */
-  void publish_guidance_status(
-    const std::unordered_map<std::string, std::vector<bool>> & guidance_triggered,
-    const rclcpp::Time & timestamp);
-
   /**
    * @brief Callback for dynamic parameter updates.
    * @param parameters Updated parameters.
    * @return Result of parameter update.
    */
   SetParametersResult on_parameter(const std::vector<rclcpp::Parameter> & parameters);
-
-  /**
-   * @brief Enable or disable start guidance.
-   */
-  void on_set_start_guidance_enabled(
-    const SetBool::Request::SharedPtr request, const SetBool::Response::SharedPtr response);
-
-  /**
-   * @brief Enable or disable stop guidance.
-   */
-  void on_set_stop_guidance_enabled(
-    const SetBool::Request::SharedPtr request, const SetBool::Response::SharedPtr response);
-
-  /**
-   * @brief Enable or disable centerline guidance.
-   */
-  void on_set_centerline_guidance_enabled(
-    const SetBool::Request::SharedPtr request, const SetBool::Response::SharedPtr response);
 
   // Core logic instance
   std::unique_ptr<DiffusionPlannerCore> core_;
@@ -231,12 +188,8 @@ private:
   rclcpp::Publisher<autoware_utils::ProcessingTimeDetail>::SharedPtr
     debug_processing_time_detail_pub_;
   rclcpp::Publisher<autoware_internal_debug_msgs::msg::Float64Stamped>::SharedPtr
-    debug_processing_time_pub_{nullptr};
+    debug_processing_time_pub_;
   rclcpp::Publisher<Trajectory>::SharedPtr pub_trajectory_{nullptr};
-  rclcpp::Publisher<Trajectory>::SharedPtr pub_mppi_reference_trajectory_{nullptr};
-  rclcpp::Publisher<Trajectory>::SharedPtr pub_mppi_optimized_trajectory_{nullptr};
-  rclcpp::Publisher<MarkerArray>::SharedPtr pub_mppi_markers_{nullptr};
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_mppi_enabled_{nullptr};
   rclcpp::Publisher<CandidateTrajectories>::SharedPtr pub_trajectories_{nullptr};
   rclcpp::Publisher<PredictedObjects>::SharedPtr pub_objects_{nullptr};
   rclcpp::Publisher<MarkerArray>::SharedPtr pub_lane_marker_{nullptr};
@@ -246,32 +199,31 @@ private:
   rclcpp::Publisher<autoware_perception_msgs::msg::TrafficLightGroup>::SharedPtr
     pub_traffic_signal_{nullptr};
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_inference_time_{nullptr};
-  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_denoising_steps_{nullptr};
-  rclcpp::Publisher<autoware_internal_debug_msgs::msg::StringStamped>::SharedPtr
-    pub_guidance_status_{nullptr};
-  rclcpp::Service<SetBool>::SharedPtr set_start_guidance_enabled_service_{nullptr};
-  rclcpp::Service<SetBool>::SharedPtr set_stop_guidance_enabled_service_{nullptr};
-  rclcpp::Service<SetBool>::SharedPtr set_centerline_guidance_enabled_service_{nullptr};
+  // Trajectory optimization debug topics (published when the optimizer runs)
+  rclcpp::Publisher<Trajectory>::SharedPtr pub_raw_trajectory_{nullptr};
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_optimization_status_{nullptr};
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_optimization_time_{nullptr};
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_{nullptr};
-  autoware_utils::InterProcessPollingSubscriber<Odometry> sub_current_odometry_{
-    this, "~/input/odometry"};
-  autoware_utils::InterProcessPollingSubscriber<SteeringReport> sub_steering_status_{
-    this, "~/input/steering_status"};
-  autoware_utils::InterProcessPollingSubscriber<AccelWithCovarianceStamped>
-    sub_current_acceleration_{this, "~/input/acceleration"};
-  autoware_utils::InterProcessPollingSubscriber<TrackedObjects> sub_tracked_objects_{
-    this, "~/input/tracked_objects"};
-  autoware_utils::InterProcessPollingSubscriber<
-    autoware_perception_msgs::msg::TrafficLightGroupArray, autoware_utils::polling_policy::All>
+
+  template <typename MessageT>
+  using BufferingPollingSubscriber =
+    autoware_utils::InterProcessPollingSubscriber<MessageT, autoware_utils::polling_policy::All>;
+
+  template <typename MessageT>
+  using NewestPollingSubscriber =
+    autoware_utils::InterProcessPollingSubscriber<MessageT, autoware_utils::polling_policy::Newest>;
+
+  BufferingPollingSubscriber<Odometry> sub_current_odometry_{this, "~/input/odometry"};
+  BufferingPollingSubscriber<TrackedObjects> sub_tracked_objects_{this, "~/input/tracked_objects"};
+  BufferingPollingSubscriber<autoware_perception_msgs::msg::TrafficLightGroupArray>
     sub_traffic_signals_{this, "~/input/traffic_signals", rclcpp::QoS{10}};
-  autoware_utils::InterProcessPollingSubscriber<TurnIndicatorsReport> sub_turn_indicators_{
+  BufferingPollingSubscriber<TurnIndicatorsReport> sub_turn_indicators_{
     this, "~/input/turn_indicators"};
-  autoware_utils::InterProcessPollingSubscriber<
-    LaneletRoute, autoware_utils::polling_policy::Newest>
-    route_subscriber_{this, "~/input/route", rclcpp::QoS{1}.transient_local()};
-  autoware_utils::InterProcessPollingSubscriber<
-    LaneletMapBin, autoware_utils::polling_policy::Newest>
-    vector_map_subscriber_{this, "~/input/vector_map", rclcpp::QoS{1}.transient_local()};
+  NewestPollingSubscriber<SteeringReport> sub_steering_{this, "~/input/steering_status"};
+  NewestPollingSubscriber<LaneletRoute> route_subscriber_{
+    this, "~/input/route", rclcpp::QoS{1}.transient_local()};
+  NewestPollingSubscriber<LaneletMapBin> vector_map_subscriber_{
+    this, "~/input/vector_map", rclcpp::QoS{1}.transient_local()};
   rclcpp::Subscription<HADMapBin>::SharedPtr sub_map_;
   UUID generator_uuid_;
   VehicleInfo vehicle_info_;
@@ -284,16 +236,6 @@ private:
   std::unique_ptr<autoware::planning_factor_interface::PlanningFactorInterface>
     planning_factor_interface_;
   DiffusionPlannerPlanningFactorParams planning_factor_params_;
-
-  /* MPPI : will be moved to another package */
-  std::unique_ptr<autoware::mppi_optimizer::FirstOrderDubinsMppiInterface> mppi_optimizer_;
-  std::shared_ptr<autoware::avoidance_target_detector::ExtendedRouteHandler>
-    extended_route_handler_;
-  autoware::avoidance_target_detector::TrackedObjectSelector object_selector_;
-  RoadBorderRtree road_border_rtree_;
-  DrivableAreaRtree drivable_area_rtree_;
-  HADMapBin lanelet_map_msg_;
-  LaneletRoute prev_route_;
 };
 
 }  // namespace autoware::diffusion_planner

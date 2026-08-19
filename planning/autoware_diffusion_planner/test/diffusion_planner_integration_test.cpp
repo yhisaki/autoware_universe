@@ -32,6 +32,8 @@
 
 namespace autoware::diffusion_planner::test
 {
+
+using autoware_perception_msgs::msg::TrackedObject;
 using namespace std::chrono_literals;  // NOLINT
 
 class DiffusionPlannerIntegrationTest : public ::testing::Test
@@ -92,9 +94,6 @@ TEST_F(DiffusionPlannerIntegrationTest, MultipleSubscribersDataFlow)
   // Create publishers for all input topics
   auto odometry_pub =
     test_node->create_publisher<nav_msgs::msg::Odometry>("/diffusion_planner/input/odometry", 10);
-  auto acceleration_pub =
-    test_node->create_publisher<geometry_msgs::msg::AccelWithCovarianceStamped>(
-      "/diffusion_planner/input/acceleration", 10);
   auto objects_pub = test_node->create_publisher<autoware_perception_msgs::msg::TrackedObjects>(
     "/diffusion_planner/input/tracked_objects", 10);
 
@@ -107,10 +106,6 @@ TEST_F(DiffusionPlannerIntegrationTest, MultipleSubscribersDataFlow)
   odometry.pose.pose.orientation.w = 1.0;
   odometry.twist.twist.linear.x = 10.0;
 
-  geometry_msgs::msg::AccelWithCovarianceStamped acceleration;
-  acceleration.header = odometry.header;
-  acceleration.accel.accel.linear.x = 0.5;
-
   autoware_perception_msgs::msg::TrackedObjects objects;
   objects.header = odometry.header;
   objects.objects.push_back(createTestObject(110.0, 200.0, 8.0, 0.0));
@@ -119,7 +114,6 @@ TEST_F(DiffusionPlannerIntegrationTest, MultipleSubscribersDataFlow)
   // Publish data multiple times
   for (int i = 0; i < 5; ++i) {
     odometry_pub->publish(odometry);
-    acceleration_pub->publish(acceleration);
     objects_pub->publish(objects);
 
     // Update positions for next iteration
@@ -130,7 +124,6 @@ TEST_F(DiffusionPlannerIntegrationTest, MultipleSubscribersDataFlow)
     // Update timestamps
     auto new_time = test_node->now();
     odometry.header.stamp = new_time;
-    acceleration.header.stamp = new_time;
     objects.header.stamp = new_time;
 
     rclcpp::spin_some(test_node);
@@ -144,23 +137,15 @@ TEST_F(DiffusionPlannerIntegrationTest, MissingDataHandling)
   auto test_node = std::make_shared<rclcpp::Node>("test_publisher");
 
   // Only publish partial data (missing odometry)
-  auto acceleration_pub =
-    test_node->create_publisher<geometry_msgs::msg::AccelWithCovarianceStamped>(
-      "/diffusion_planner/input/acceleration", 10);
   auto objects_pub = test_node->create_publisher<autoware_perception_msgs::msg::TrackedObjects>(
     "/diffusion_planner/input/tracked_objects", 10);
 
-  geometry_msgs::msg::AccelWithCovarianceStamped acceleration;
-  acceleration.header.stamp = test_node->now();
-  acceleration.header.frame_id = "map";
-  acceleration.accel.accel.linear.x = 0.5;
-
   autoware_perception_msgs::msg::TrackedObjects objects;
-  objects.header = acceleration.header;
+  objects.header.stamp = test_node->now();
+  objects.header.frame_id = "map";
   objects.objects.push_back(createTestObject(110.0, 200.0, 8.0, 0.0));
 
   // Publish incomplete data
-  acceleration_pub->publish(acceleration);
   objects_pub->publish(objects);
 
   rclcpp::spin_some(test_node);
