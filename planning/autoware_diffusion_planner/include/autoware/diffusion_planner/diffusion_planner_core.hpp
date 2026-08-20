@@ -87,16 +87,10 @@ struct PlannerOutput
   CandidateTrajectories candidate_trajectories;
   PredictedObjects predicted_objects;
   TurnIndicatorsCommand turn_indicators_command;
-  // Raw (pre-optimization) batch-0 trajectory and solver stats, set when the
-  // trajectory optimization ran. Used for debug topics.
   std::optional<Trajectory> raw_trajectory;
   TrajectoryOptimizationDebug optimization_debug;
-  // Batch-0 trajectory after the road border avoidance shift (set when it modified
-  // anything) and its stats. Used for debug topics.
   std::optional<Trajectory> avoidance_adjusted_trajectory;
   RoadBorderAvoidanceDebug avoidance_debug;
-  // Batch-0 trajectory before the stop point fixing (set when the fixing is enabled).
-  // Used for debug topics.
   std::optional<Trajectory> pre_stop_fixing_trajectory;
 };
 

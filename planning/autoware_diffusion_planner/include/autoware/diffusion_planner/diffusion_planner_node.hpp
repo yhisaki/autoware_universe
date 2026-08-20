@@ -45,7 +45,6 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace autoware::diffusion_planner
@@ -119,7 +118,6 @@ class DiffusionPlanner : public rclcpp::Node
 {
 public:
   explicit DiffusionPlanner(const rclcpp::NodeOptions & options);
-  ~DiffusionPlanner();
 
 private:
   /**

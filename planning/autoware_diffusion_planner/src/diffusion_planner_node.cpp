@@ -155,8 +155,6 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
     std::bind(&DiffusionPlanner::on_parameter, this, std::placeholders::_1));
 }
 
-DiffusionPlanner::~DiffusionPlanner() = default;
-
 void DiffusionPlanner::set_up_params()
 {
   // node params
@@ -197,8 +195,8 @@ void DiffusionPlanner::set_up_params()
     this->declare_parameter<double>("trajectory_optimization.max_acceleration_mps2", 3.0);
   opt.max_steering_rate_rps =
     this->declare_parameter<double>("trajectory_optimization.max_steering_rate_rps", 1.0);
-  opt.max_lateral_acceleration_mps2 = this->declare_parameter<double>(
-    "trajectory_optimization.max_lateral_acceleration_mps2", 3.0);
+  opt.max_lateral_acceleration_mps2 =
+    this->declare_parameter<double>("trajectory_optimization.max_lateral_acceleration_mps2", 3.0);
   opt.max_sqp_iterations =
     this->declare_parameter<int>("trajectory_optimization.max_sqp_iterations", 50);
 #ifndef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
