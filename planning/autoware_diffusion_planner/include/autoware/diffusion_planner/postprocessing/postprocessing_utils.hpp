@@ -29,6 +29,8 @@
 #include <geometry_msgs/msg/point.hpp>
 
 #include <cassert>
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -98,6 +100,31 @@ Trajectory create_ego_trajectory(
  */
 int64_t count_valid_elements(
   const xt::xarray<float> & data, int64_t len, int64_t dim2, int64_t dim3, int64_t batch_idx);
+
+struct StopPointFixingParams
+{
+  bool enable{false};
+  // The stop point is the first point whose velocity is at or below this threshold,
+  // reached while the trajectory has been decelerating the whole time (all
+  // accelerations from the first point up to and including it are negative).
+  double velocity_threshold_mps{0.3};
+};
+
+/**
+ * @brief Freeze the trajectory tail at the first stopping point.
+ *
+ * Scans from the first point while the acceleration stays negative; the first such point
+ * whose velocity is at or below the threshold becomes the stop point, and it and all
+ * subsequent points are fixed to its pose with zero velocity, acceleration, and heading
+ * rate (steering angle is kept). If any point accelerates (acceleration >= 0) before the
+ * threshold is reached, nothing is modified.
+ *
+ * @param trajectory Trajectory to modify in place.
+ * @param params Stop detection parameters.
+ * @return Index of the stop point, or std::nullopt when no stopping point was found.
+ */
+std::optional<size_t> fix_stop_points(
+  Trajectory & trajectory, const StopPointFixingParams & params);
 
 }  // namespace autoware::diffusion_planner::postprocess
 #endif  // AUTOWARE__DIFFUSION_PLANNER__POSTPROCESSING__POSTPROCESSING_UTILS_HPP_

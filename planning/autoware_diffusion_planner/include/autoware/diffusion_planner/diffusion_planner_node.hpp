@@ -206,6 +206,8 @@ private:
   // Road border avoidance debug topics (published when the avoidance runs)
   rclcpp::Publisher<Trajectory>::SharedPtr pub_avoidance_trajectory_{nullptr};
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_avoidance_shifted_count_{nullptr};
+  // Stop point fixing debug topic (published when the fixing is enabled)
+  rclcpp::Publisher<Trajectory>::SharedPtr pub_pre_stop_fixing_trajectory_{nullptr};
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_{nullptr};
 
   template <typename MessageT>

@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -242,6 +243,39 @@ int64_t count_valid_elements(
   }
 
   return valid_count;
+}
+
+std::optional<size_t> fix_stop_points(Trajectory & trajectory, const StopPointFixingParams & params)
+{
+  auto & points = trajectory.points;
+  // Walk from the start while the trajectory keeps decelerating; the first point at or
+  // below the velocity threshold within that prefix is the stop point. Any point with
+  // non-negative acceleration before that ends the search (the vehicle is not stopping).
+  auto stop_it = points.end();
+  for (auto it = points.begin(); it != points.end(); ++it) {
+    if (it->acceleration_mps2 >= -0.01F) {
+      break;
+    }
+    if (it->longitudinal_velocity_mps <= params.velocity_threshold_mps) {
+      stop_it = it;
+      break;
+    }
+  }
+  if (stop_it == points.end()) {
+    return std::nullopt;
+  }
+
+  const auto stop_pose = stop_it->pose;
+  const float stop_steering = stop_it->front_wheel_angle_rad;
+  for (auto it = stop_it; it != points.end(); ++it) {
+    it->pose = stop_pose;
+    it->longitudinal_velocity_mps = 0.0F;
+    it->lateral_velocity_mps = 0.0F;
+    it->acceleration_mps2 = 0.0F;
+    it->heading_rate_rps = 0.0F;
+    it->front_wheel_angle_rad = stop_steering;
+  }
+  return static_cast<size_t>(std::distance(points.begin(), stop_it));
 }
 
 namespace

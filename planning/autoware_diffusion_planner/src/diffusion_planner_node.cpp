@@ -104,6 +104,8 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
     this->create_publisher<Trajectory>("~/debug/road_border_avoidance/adjusted_trajectory", 1);
   pub_avoidance_shifted_count_ = this->create_publisher<std_msgs::msg::Int32>(
     "~/debug/road_border_avoidance/shifted_point_count", 1);
+  pub_pre_stop_fixing_trajectory_ =
+    this->create_publisher<Trajectory>("~/debug/stop_point_fixing/unfixed_trajectory", 1);
 
   set_up_params();
   vehicle_info_ = autoware::vehicle_info_utils::VehicleInfoUtils(*this).getVehicleInfo();
@@ -222,6 +224,12 @@ void DiffusionPlanner::set_up_params()
     this->declare_parameter<double>("road_border_avoidance.max_lateral_shift_m", 1.5);
   avoidance.propagate_shift =
     this->declare_parameter<bool>("road_border_avoidance.propagate_shift", true);
+
+  // stop point fixing params (static; changing them requires a restart)
+  auto & stop_fixing = params_.stop_point_fixing;
+  stop_fixing.enable = this->declare_parameter<bool>("stop_point_fixing.enable", false);
+  stop_fixing.velocity_threshold_mps =
+    this->declare_parameter<double>("stop_point_fixing.velocity_threshold_mps", 0.3);
 
   // planning factor params
   planning_factor_params_.enable_stop =
@@ -560,6 +568,9 @@ void DiffusionPlanner::on_timer()
     if (planner_output.raw_trajectory) {
       pub_raw_trajectory_->publish(*planner_output.raw_trajectory);
     }
+  }
+  if (planner_output.pre_stop_fixing_trajectory) {
+    pub_pre_stop_fixing_trajectory_->publish(*planner_output.pre_stop_fixing_trajectory);
   }
   if (optimization_debug.attempted) {
     std_msgs::msg::Int32 status_msg;

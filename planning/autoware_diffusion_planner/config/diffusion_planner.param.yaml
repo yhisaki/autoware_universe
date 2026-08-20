@@ -33,6 +33,9 @@
       shift_step_m: 0.1           # lateral shift resolution [m]
       max_lateral_shift_m: 1.5    # cap on the total lateral offset from the raw position [m]
       propagate_shift: true       # carry the offset over to all subsequent points
+    stop_point_fixing:
+      enable: false
+      velocity_threshold_mps: 0.3  # freeze the tail at the first point with velocity <= this while decelerating from the start [m/s]
     planning_factor:
       enable_stop: true
       enable_slowdown: false

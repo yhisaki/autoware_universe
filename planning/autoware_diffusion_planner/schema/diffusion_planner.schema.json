@@ -195,6 +195,23 @@
           },
           "required": ["enable"]
         },
+        "stop_point_fixing": {
+          "type": "object",
+          "properties": {
+            "enable": {
+              "type": "boolean",
+              "default": false,
+              "description": "Freeze the optimized trajectory tail as stop points from the first decelerating point at or below the velocity threshold"
+            },
+            "velocity_threshold_mps": {
+              "type": "number",
+              "default": 0.3,
+              "minimum": 0.0,
+              "description": "Stop detection velocity threshold [m/s]; the stop point is the first point at or below this velocity reached while all accelerations from the trajectory start are negative"
+            }
+          },
+          "required": ["enable"]
+        },
         "planning_factor": {
           "type": "object",
           "properties": {

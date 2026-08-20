@@ -318,6 +318,13 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
     (void)current_steering_angle_rad;
 #endif
 
+    if (params_.stop_point_fixing.enable) {
+      if (i == 0) {
+        output.pre_stop_fixing_trajectory = trajectory;
+      }
+      postprocess::fix_stop_points(trajectory, params_.stop_point_fixing);
+    }
+
     if (i == 0) {
       // Use the first trajectory as the main output trajectory
       output.trajectory = trajectory;

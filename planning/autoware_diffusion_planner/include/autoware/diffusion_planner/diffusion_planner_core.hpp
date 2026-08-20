@@ -21,6 +21,7 @@
 #ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
 #include "autoware/diffusion_planner/optimization/trajectory_optimizer.hpp"
 #endif
+#include "autoware/diffusion_planner/postprocessing/postprocessing_utils.hpp"
 #include "autoware/diffusion_planner/postprocessing/road_border_avoidance.hpp"
 #include "autoware/diffusion_planner/preprocessing/input_builder.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/map.hpp"
@@ -94,6 +95,9 @@ struct PlannerOutput
   // anything) and its stats. Used for debug topics.
   std::optional<Trajectory> avoidance_adjusted_trajectory;
   RoadBorderAvoidanceDebug avoidance_debug;
+  // Batch-0 trajectory before the stop point fixing (set when the fixing is enabled).
+  // Used for debug topics.
+  std::optional<Trajectory> pre_stop_fixing_trajectory;
 };
 
 struct DiffusionPlannerParams
@@ -111,6 +115,7 @@ struct DiffusionPlannerParams
   double line_string_max_step_m;
   optimization::TrajectoryOptimizationParams trajectory_optimization;
   postprocess::RoadBorderAvoidanceParams road_border_avoidance;
+  postprocess::StopPointFixingParams stop_point_fixing;
 };
 
 /**
