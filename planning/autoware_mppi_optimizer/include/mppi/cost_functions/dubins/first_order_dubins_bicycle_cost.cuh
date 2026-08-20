@@ -46,7 +46,7 @@ struct FirstOrderDubinsBicycleCostParams : public CostParams<2>
   float boundary_threshold = 0.8F;
   /** Distance inside boundary_threshold at which the gradual lateral barrier activates. */
   float lateral_boundary_soft_margin = 0.2F;
-  float lateral_boundary_barrier_weight;
+  float lateral_boundary_barrier_weight = 0.0F;
   /** Beyond bound if signed lateral offset exceeds these (path-left = +); <0 falls back to
    * boundary_threshold. */
   float accel_cmd_coeff = 0.0F;
@@ -70,9 +70,9 @@ struct FirstOrderDubinsBicycleCostParams : public CostParams<2>
   /** Added to the ego footprint when testing collision with road-border segments. */
   float road_border_collision_margin = 0.2F;
   float obstacle_safe_margin = 0.5F;
-  float obstacle_barrier_weight;
+  float obstacle_barrier_weight = 0.0F;
   float road_border_safe_margin = 0.3F;
-  float road_border_barrier_weight;
+  float road_border_barrier_weight = 0.0F;
   float drivable_area_safe_margin = 0.0F;
   float drivable_area_barrier_weight = 2000.0F;
   float crash_contact_penalty = 100000.0F;

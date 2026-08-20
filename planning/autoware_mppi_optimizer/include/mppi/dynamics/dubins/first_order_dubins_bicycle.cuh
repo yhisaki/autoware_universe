@@ -173,7 +173,11 @@ public:
   __device__ void computeDynamics(
     float * state, float * control, float * state_der, float * theta = nullptr);
 
-  /** Device-only state-aware control filtering; host calls retain the parent constraints. */
+  /** Host state-aware control filtering with prevent_reverse_velocity. */
+  void enforceConstraints(
+    const Eigen::Ref<const state_array> & state, Eigen::Ref<control_array> control);
+
+  /** Device state-aware control filtering. */
   __device__ void enforceConstraints(float * state, float * control);
 
   void stateToOutput(const Eigen::Ref<const state_array> & state, Eigen::Ref<output_array> output);

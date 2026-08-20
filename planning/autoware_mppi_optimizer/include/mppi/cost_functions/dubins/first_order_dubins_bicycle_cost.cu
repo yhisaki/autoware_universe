@@ -280,6 +280,7 @@ FirstOrderDubinsBicycleCostImpl<CLASS_T, NUM_TIMESTEPS, PARAMS_T, DYN_PARAMS_T>:
   if (threadIdx.y == 0) {
     *projectionHintSlot(theta_c) = -1.0F;
   }
+  __syncthreads();
 }
 
 template <class CLASS_T, int NUM_TIMESTEPS, class PARAMS_T, class DYN_PARAMS_T>
@@ -410,6 +411,13 @@ void FirstOrderDubinsBicycleCostImpl<CLASS_T, NUM_TIMESTEPS, PARAMS_T, DYN_PARAM
       ref_y_[i] = y[n - 1];
       ref_v_[i] = v[n - 1];
       ref_yaw_[i] = end_yaw;
+    }
+  } else {
+    for (int i = 0; i < NUM_TIMESTEPS; ++i) {
+      ref_x_[i] = 0.0F;
+      ref_y_[i] = 0.0F;
+      ref_v_[i] = 0.0F;
+      ref_yaw_[i] = 0.0F;
     }
   }
   dataToDevice();
@@ -1146,46 +1154,49 @@ __device__ float
 FirstOrderDubinsBicycleCostImpl<CLASS_T, NUM_TIMESTEPS, PARAMS_T, DYN_PARAMS_T>::terminalCost(
   float * y, float * theta_c)
 {
-  const float x_pos = y[static_cast<int>(O::BASELINK_POS_I_X)];
-  const float y_pos = y[static_cast<int>(O::BASELINK_POS_I_Y)];
-  const float yaw = y[static_cast<int>(O::YAW)];
-  constexpr int timestep = NUM_TIMESTEPS - 1;
-  const float track_val = computeTrackValue(x_pos, y_pos, timestep, theta_c);
-  const float track_cost =
-    this->params_.track_coeff * track_val * this->params_.track_terminal_scale;
-  const float heading_cost = this->params_.heading_coeff *
-                             computeHeadingValue(yaw, timestep, theta_c) *
-                             this->params_.track_terminal_scale;
-  float lateral_distance_cost = 0.0F;
-  float lateral_boundary_cost = 0.0F;
-  float lateral_yaw_error_cost = 0.0F;
-  float remaining_distance_cost = 0.0F;
-  float path_overshoot_cost = 0.0F;
-  if (needsLateralPathMetrics(this->params_)) {
-    const LateralPathMetrics lateral = computeLateralPathMetrics(x_pos, y_pos, yaw, theta_c);
-    lateral_distance_cost = this->params_.lateral_distance_coeff * lateral.lateral_distance *
+  if (threadIdx.y == 0) {
+    const float x_pos = y[static_cast<int>(O::BASELINK_POS_I_X)];
+    const float y_pos = y[static_cast<int>(O::BASELINK_POS_I_Y)];
+    const float yaw = y[static_cast<int>(O::YAW)];
+    constexpr int timestep = NUM_TIMESTEPS - 1;
+    const float track_val = computeTrackValue(x_pos, y_pos, timestep, theta_c);
+    const float track_cost =
+      this->params_.track_coeff * track_val * this->params_.track_terminal_scale;
+    const float heading_cost = this->params_.heading_coeff *
+                               computeHeadingValue(yaw, timestep, theta_c) *
+                               this->params_.track_terminal_scale;
+    float lateral_distance_cost = 0.0F;
+    float lateral_boundary_cost = 0.0F;
+    float lateral_yaw_error_cost = 0.0F;
+    float remaining_distance_cost = 0.0F;
+    float path_overshoot_cost = 0.0F;
+    if (needsLateralPathMetrics(this->params_)) {
+      const LateralPathMetrics lateral = computeLateralPathMetrics(x_pos, y_pos, yaw, theta_c);
+      lateral_distance_cost = this->params_.lateral_distance_coeff * lateral.lateral_distance *
+                              this->params_.track_terminal_scale;
+      lateral_boundary_cost = lateralBoundaryBarrierCost(this->params_, lateral.lateral_distance);
+      lateral_yaw_error_cost = this->params_.lateral_yaw_error_coeff * lateral.lateral_yaw_error_sq *
+                               this->params_.track_terminal_scale;
+      remaining_distance_cost = this->params_.remaining_distance_coeff *
+                                lateral.remaining_distance_s * this->params_.track_terminal_scale;
+      path_overshoot_cost = this->params_.path_overshoot_coeff * lateral.overshoot_distance_s *
                             this->params_.track_terminal_scale;
-    lateral_boundary_cost = lateralBoundaryBarrierCost(this->params_, lateral.lateral_distance);
-    lateral_yaw_error_cost = this->params_.lateral_yaw_error_coeff * lateral.lateral_yaw_error_sq *
-                             this->params_.track_terminal_scale;
-    remaining_distance_cost = this->params_.remaining_distance_coeff *
-                              lateral.remaining_distance_s * this->params_.track_terminal_scale;
-    path_overshoot_cost = this->params_.path_overshoot_coeff * lateral.overshoot_distance_s *
-                          this->params_.track_terminal_scale;
+    }
+    const float track_center_cost = this->params_.track_center_coeff *
+                                    computeTrackCenterValue(x_pos, y_pos, yaw, timestep, theta_c) *
+                                    this->params_.track_terminal_scale;
+    const float corner_buffer_cost = computeCornerBufferCost(x_pos, y_pos, yaw);
+    float drivable_area_cost = 0.0F;
+    float obstacle_cost = 0.0F;
+    float road_border_cost = 0.0F;
+    computeGradualCrashCosts(
+      x_pos, y_pos, yaw, NUM_TIMESTEPS - 1, drivable_area_cost, obstacle_cost, road_border_cost);
+    return track_cost + heading_cost + lateral_distance_cost + lateral_boundary_cost +
+           lateral_yaw_error_cost + remaining_distance_cost + path_overshoot_cost +
+           drivable_area_cost + track_center_cost + corner_buffer_cost + obstacle_cost +
+           road_border_cost;
   }
-  const float track_center_cost = this->params_.track_center_coeff *
-                                  computeTrackCenterValue(x_pos, y_pos, yaw, timestep, theta_c) *
-                                  this->params_.track_terminal_scale;
-  const float corner_buffer_cost = computeCornerBufferCost(x_pos, y_pos, yaw);
-  float drivable_area_cost = 0.0F;
-  float obstacle_cost = 0.0F;
-  float road_border_cost = 0.0F;
-  computeGradualCrashCosts(
-    x_pos, y_pos, yaw, NUM_TIMESTEPS - 1, drivable_area_cost, obstacle_cost, road_border_cost);
-  return track_cost + heading_cost + lateral_distance_cost + lateral_boundary_cost +
-         lateral_yaw_error_cost + remaining_distance_cost + path_overshoot_cost +
-         drivable_area_cost + track_center_cost + corner_buffer_cost + obstacle_cost +
-         road_border_cost;
+  return 0.0F;
 }
 
 template <class CLASS_T, int NUM_TIMESTEPS, class PARAMS_T, class DYN_PARAMS_T>

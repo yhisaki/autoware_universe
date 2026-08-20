@@ -165,7 +165,9 @@ if(CUDA_AVAIL AND TRT_AVAIL)
     set_target_properties(test_first_order_dubins_mppi_interface PROPERTIES
       CXX_STANDARD 17
       CUDA_STANDARD 17
-      $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:COMPILE_OPTIONS "-Xcudafe;--diag_suppress=177"
+    )
+    target_compile_options(test_first_order_dubins_mppi_interface PRIVATE
+      $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-Xcudafe;--diag_suppress=177>
     )
     set_tests_properties(test_first_order_dubins_mppi_interface PROPERTIES
       LABELS "gpu"
@@ -186,7 +188,9 @@ if(CUDA_AVAIL AND TRT_AVAIL)
     set_target_properties(test_mppi_trajectory_validator PROPERTIES
       CXX_STANDARD 17
       CUDA_STANDARD 17
-      $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:COMPILE_OPTIONS "-Xcudafe;--diag_suppress=177"
+    )
+    target_compile_options(test_mppi_trajectory_validator PRIVATE
+      $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-Xcudafe;--diag_suppress=177>
     )
     ament_add_gtest_test(test_mppi_trajectory_validator)
     set_tests_properties(test_mppi_trajectory_validator PROPERTIES

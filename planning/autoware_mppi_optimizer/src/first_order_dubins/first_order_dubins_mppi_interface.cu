@@ -923,33 +923,44 @@ struct FirstOrderDubinsMppiInterface::Impl
       return;
     }
     pending_delay_buffer = false;
-    // Empty vectors mean "do not force-seed" — fall back to measured accel/steer hold.
-    if (pending_delay_accel.empty() || pending_delay_steer.empty()) {
+    if (pending_delay_accel.empty() && pending_delay_steer.empty()) {
       accel_delay_buffer.clear();
       steer_delay_buffer.clear();
       delay_buffer_seeded = false;
       return;
     }
-    const float accel_hold = pending_delay_accel.back();
-    const float steer_hold = pending_delay_steer.back();
     if (acc_delay_steps > 0) {
-      accel_delay_buffer.resize(static_cast<size_t>(acc_delay_steps));
-      for (int i = 0; i < acc_delay_steps; ++i) {
-        accel_delay_buffer[static_cast<size_t>(i)] =
-          static_cast<size_t>(i) < pending_delay_accel.size()
-            ? pending_delay_accel[static_cast<size_t>(i)]
-            : accel_hold;
+      if (pending_delay_accel.empty()) {
+        accel_delay_buffer.assign(
+          static_cast<size_t>(acc_delay_steps),
+          x(static_cast<int>(FirstOrderDubinsBicycleParams::StateIndex::ACCELERATION)));
+      } else {
+        const float accel_hold = pending_delay_accel.back();
+        accel_delay_buffer.resize(static_cast<size_t>(acc_delay_steps));
+        for (int i = 0; i < acc_delay_steps; ++i) {
+          accel_delay_buffer[static_cast<size_t>(i)] =
+            static_cast<size_t>(i) < pending_delay_accel.size()
+              ? pending_delay_accel[static_cast<size_t>(i)]
+              : accel_hold;
+        }
       }
     } else {
       accel_delay_buffer.clear();
     }
     if (steer_delay_steps > 0) {
-      steer_delay_buffer.resize(static_cast<size_t>(steer_delay_steps));
-      for (int i = 0; i < steer_delay_steps; ++i) {
-        steer_delay_buffer[static_cast<size_t>(i)] =
-          static_cast<size_t>(i) < pending_delay_steer.size()
-            ? pending_delay_steer[static_cast<size_t>(i)]
-            : steer_hold;
+      if (pending_delay_steer.empty()) {
+        steer_delay_buffer.assign(
+          static_cast<size_t>(steer_delay_steps),
+          x(static_cast<int>(FirstOrderDubinsBicycleParams::StateIndex::STEER_ANGLE)));
+      } else {
+        const float steer_hold = pending_delay_steer.back();
+        steer_delay_buffer.resize(static_cast<size_t>(steer_delay_steps));
+        for (int i = 0; i < steer_delay_steps; ++i) {
+          steer_delay_buffer[static_cast<size_t>(i)] =
+            static_cast<size_t>(i) < pending_delay_steer.size()
+              ? pending_delay_steer[static_cast<size_t>(i)]
+              : steer_hold;
+        }
       }
     } else {
       steer_delay_buffer.clear();
@@ -1339,10 +1350,10 @@ struct FirstOrderDubinsMppiInterface::Impl
 
   void teardown()
   {
-    // The controller owns the CUDA lifecycle of the model, cost, feedback controller, and
-    // sampler. Destroy it before setup() reallocates those shared objects; otherwise the old
-    // controller can free allocations created for its replacement.
     controller.reset();
+    cost.freeCudaMem();
+    model.freeCudaMem();
+    sampler.freeCudaMem();
     initialized = false;
   }
 };
@@ -1817,9 +1828,12 @@ FirstOrderDubinsMppiOptimizationResult FirstOrderDubinsMppiInterface::optimizeTr
     result.debug.was_rejected = true;
     RCLCPP_WARN(
       mppiLogger(),
-      "MPPI output rejected with invalidity_mask=%u at point=%zu; returning the input trajectory "
+      "MPPI output rejected with invalidity_mask=%u at point=%s; returning the input trajectory "
       "unchanged",
-      static_cast<unsigned int>(validation.reasons), validation.first_invalid_index.value());
+      static_cast<unsigned int>(validation.reasons),
+      validation.first_invalid_index.has_value()
+        ? std::to_string(validation.first_invalid_index.value()).c_str()
+        : "unknown");
   }
 
   // Advance the vendor control history after all getControlSeq / getActualStateSeq reads

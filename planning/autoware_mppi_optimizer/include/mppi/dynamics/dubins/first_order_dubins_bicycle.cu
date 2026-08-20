@@ -229,6 +229,24 @@ __device__ void FirstOrderDubinsBicycleImpl<CLASS_T, PARAMS_T>::computeDynamics(
 }
 
 template <class CLASS_T, class PARAMS_T>
+void FirstOrderDubinsBicycleImpl<CLASS_T, PARAMS_T>::enforceConstraints(
+  const Eigen::Ref<const state_array> & state, Eigen::Ref<control_array> control)
+{
+  this->enforceConstraints(control);
+  if (!this->params_.prevent_reverse_velocity) {
+    return;
+  }
+
+  const int velocity_idx = static_cast<int>(S::VEL_X);
+  const int acceleration_idx = static_cast<int>(C::ACCELERATION_CMD);
+  const float velocity = state(velocity_idx);
+  const float acceleration_command = control(acceleration_idx);
+  if (velocity >= 0.0F && velocity + acceleration_command * PARAMS_T::kControlDt < 0.0F) {
+    control(acceleration_idx) = -velocity / PARAMS_T::kControlDt;
+  }
+}
+
+template <class CLASS_T, class PARAMS_T>
 __device__ void FirstOrderDubinsBicycleImpl<CLASS_T, PARAMS_T>::enforceConstraints(
   float * state, float * control)
 {
