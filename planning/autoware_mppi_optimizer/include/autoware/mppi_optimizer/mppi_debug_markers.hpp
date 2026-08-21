@@ -17,6 +17,7 @@
 
 #include "autoware/mppi_optimizer/first_order_dubins_mppi_interface.hpp"
 
+#include <autoware_utils_geometry/boost_geometry.hpp>
 #include <builtin_interfaces/msg/duration.hpp>
 #include <rclcpp/time.hpp>
 

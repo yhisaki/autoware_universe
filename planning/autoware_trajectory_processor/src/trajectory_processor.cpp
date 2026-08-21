@@ -64,6 +64,7 @@ TrajectoryProcessor::TrajectoryProcessor(const rclcpp::NodeOptions & options)
 void TrajectoryProcessor::on_map(const autoware_map_msgs::msg::LaneletMapBin::ConstSharedPtr msg)
 {
   autoware_utils_debug::ScopedTimeTrack st(__func__, *time_keeper_);
+  lanelet_map_bin_ptr_ = msg;
   lanelet_map_ptr_ = autoware::experimental::lanelet2_utils::remove_const(
     autoware::experimental::lanelet2_utils::from_autoware_map_msgs(*msg));
 }
@@ -120,11 +121,14 @@ tl::expected<TrajectoryProcessorData, std::string> TrajectoryProcessor::make_inp
   TrajectoryProcessorData data;
   data.current_odometry = sub_current_odometry_.take_data();
   data.current_acceleration = sub_current_acceleration_.take_data();
+  data.current_steering = sub_current_steering_.take_data();
   data.predicted_objects = sub_objects_.take_data();
+  data.tracked_objects = sub_tracked_objects_.take_data();
   data.obstacle_pointcloud = sub_pointcloud_.take_data();
   data.route = sub_route_.take_data();
   data.traffic_light_signals = sub_traffic_lights_.take_data();
   data.lanelet_map = lanelet_map_ptr_;
+  data.lanelet_map_bin = lanelet_map_bin_ptr_;
 
   if (!data.current_odometry || !data.current_acceleration) {
     return tl::make_unexpected("Data is not ready: odometry or acceleration is not set");
@@ -179,6 +183,9 @@ void TrajectoryProcessor::on_trajectories(const CandidateTrajectories::ConstShar
        ++candidate_index) {
     auto & candidate = output.candidate_trajectories.at(candidate_index);
     auto data = input.value();
+    data.candidate_header = candidate.header;
+    data.candidate_index = candidate_index;
+    data.candidate_count = output.candidate_trajectories.size();
     for (auto & processor_plugin : plugins_) {
       const auto result = processor_plugin->process(candidate.points, data);
       processor_plugin->publish_debug_data("trajectory_" + std::to_string(candidate_index));

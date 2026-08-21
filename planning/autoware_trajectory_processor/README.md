@@ -20,6 +20,8 @@ The `autoware_trajectory_processor` package runs safety modifiers and trajectory
 
 The package uses one `TrajectoryProcessor` ROS 2 component. Plugins are dynamically loaded at startup, inherit from `TrajectoryProcessorPluginBase`, and execute in the exact order configured by `plugin_names`.
 
+External packages can export processor plugins through `pluginlib`. The processor data snapshot includes candidate identity, vehicle state, perception data, route data, and both converted and raw lanelet maps. A plugin validates only the optional inputs that it uses.
+
 ### Plugin Loading and Execution
 
 Plugins are loaded based on the `plugin_names` parameter, which defines both which plugins to load and their execution order:
@@ -193,6 +195,8 @@ This package depends on the following packages:
 
 - **Input**: `autoware_internal_planning_msgs::msg::CandidateTrajectories`
 - **Output**: Modified `autoware_internal_planning_msgs::msg::CandidateTrajectories` and selected `autoware_planning_msgs::msg::Trajectory`
+
+The node also subscribes to odometry, acceleration, steering status, predicted and tracked objects, point cloud data, traffic signals, route, and vector map topics for plugin use.
 
 ### Parameters
 

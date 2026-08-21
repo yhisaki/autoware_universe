@@ -413,7 +413,6 @@ SetParametersResult DiffusionPlanner::on_parameter(
       temp_params.line_string_max_step_m != previous_line_string_max_step_m;
     params_ = temp_params;
     core_->update_params(params_);
-
     if (
       model_paths_changed || batch_size_changed || dpm_solver_steps_changed || backend_changed ||
       trt_config_changed) {

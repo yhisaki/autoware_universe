@@ -11,11 +11,16 @@
   <arg name="trajectory_kinematic_feasibility_enforcer_param_path" default="$(find-pkg-share autoware_trajectory_processor)/config/plugins/trajectory_kinematic_feasibility_enforcer.param.yaml"/>
   <arg name="trajectory_mpt_optimizer_param_path" default="$(find-pkg-share autoware_trajectory_processor)/config/plugins/trajectory_mpt_optimizer.param.yaml"/>
   <arg name="trajectory_temporal_mpt_optimizer_param_path" default="$(find-pkg-share autoware_trajectory_processor)/config/plugins/trajectory_temporal_mpt_optimizer.param.yaml"/>
+  <arg name="vehicle_info_param_path" default="$(find-pkg-share autoware_trajectory_processor)/config/empty.param.yaml"/>
+  <arg name="simulator_model_param_path" default="$(find-pkg-share autoware_trajectory_processor)/config/empty.param.yaml"/>
+  <arg name="mppi_param_path" default="$(find-pkg-share autoware_trajectory_processor)/config/empty.param.yaml"/>
 
   <arg name="input_trajectories" default="/planning/diffusion_planner/candidate_trajectories"/>
   <arg name="input_odometry" default="/localization/kinematic_state"/>
   <arg name="input_acceleration" default="/localization/acceleration"/>
+  <arg name="input_steering_status" default="/vehicle/status/steering_status"/>
   <arg name="input_objects" default="/perception/object_recognition/objects"/>
+  <arg name="input_tracked_objects" default="/perception/object_recognition/tracking/objects"/>
   <arg name="input_pointcloud" default="/perception/obstacle_segmentation/pointcloud"/>
   <arg name="input_route" default="/planning/mission_planning/route"/>
   <arg name="input_traffic_signals" default="/perception/traffic_light_recognition/traffic_signals"/>
@@ -38,10 +43,15 @@
     <param from="$(var trajectory_kinematic_feasibility_enforcer_param_path)" allow_substs="true"/>
     <param from="$(var trajectory_mpt_optimizer_param_path)" allow_substs="true"/>
     <param from="$(var trajectory_temporal_mpt_optimizer_param_path)" allow_substs="true"/>
+    <param from="$(var vehicle_info_param_path)" allow_substs="true"/>
+    <param from="$(var simulator_model_param_path)"/>
+    <param from="$(var mppi_param_path)" allow_substs="true"/>
     <remap from="~/input/trajectories" to="$(var input_trajectories)"/>
     <remap from="~/input/odometry" to="$(var input_odometry)"/>
     <remap from="~/input/acceleration" to="$(var input_acceleration)"/>
+    <remap from="~/input/steering_status" to="$(var input_steering_status)"/>
     <remap from="~/input/objects" to="$(var input_objects)"/>
+    <remap from="~/input/tracked_objects" to="$(var input_tracked_objects)"/>
     <remap from="~/input/pointcloud" to="$(var input_pointcloud)"/>
     <remap from="~/input/route" to="$(var input_route)"/>
     <remap from="~/input/traffic_signals" to="$(var input_traffic_signals)"/>
