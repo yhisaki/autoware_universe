@@ -174,8 +174,7 @@ public:
     float * state, float * control, float * state_der, float * theta = nullptr);
 
   /** Host state-aware control filtering with prevent_reverse_velocity. */
-  void enforceConstraints(
-    const Eigen::Ref<const state_array> & state, Eigen::Ref<control_array> control);
+  void enforceConstraints(Eigen::Ref<state_array> state, Eigen::Ref<control_array> control);
 
   /** Device state-aware control filtering. */
   __device__ void enforceConstraints(float * state, float * control);

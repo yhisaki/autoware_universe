@@ -230,9 +230,9 @@ __device__ void FirstOrderDubinsBicycleImpl<CLASS_T, PARAMS_T>::computeDynamics(
 
 template <class CLASS_T, class PARAMS_T>
 void FirstOrderDubinsBicycleImpl<CLASS_T, PARAMS_T>::enforceConstraints(
-  const Eigen::Ref<const state_array> & state, Eigen::Ref<control_array> control)
+  Eigen::Ref<state_array> state, Eigen::Ref<control_array> control)
 {
-  this->enforceConstraints(control);
+  PARENT_CLASS::enforceConstraints(state, control);
   if (!this->params_.prevent_reverse_velocity) {
     return;
   }
