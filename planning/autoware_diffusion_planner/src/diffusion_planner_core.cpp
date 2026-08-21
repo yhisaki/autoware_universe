@@ -192,14 +192,17 @@ DiffusionPlannerCore::BufferUpdateResult DiffusionPlannerCore::update_buffer(
   const Eigen::Matrix4d map_to_ego_transform =
     utils::inverse(utils::pose_to_matrix4d(ego_history_.back().pose.pose));
   selected_agents_ = preprocess::select_current_agents(
-    objects_history_.msgs(), frame_time(), map_to_ego_transform, MAX_NUM_NEIGHBORS);
+    preprocess::MessageView<autoware_perception_msgs::msg::TrackedObjects>{objects_history_.msgs()},
+    frame_time(), map_to_ego_transform, MAX_NUM_NEIGHBORS);
 
   return preprocess::FrameInputs{
     frame_time(),
-    ego_history_.msgs(),
-    turn_indicators_history_.msgs(),
-    objects_history_.msgs(),
-    traffic_signals_history_.msgs(),
+    preprocess::MessageView<nav_msgs::msg::Odometry>{ego_history_.msgs()},
+    preprocess::MessageView<autoware_vehicle_msgs::msg::TurnIndicatorsReport>{
+      turn_indicators_history_.msgs()},
+    preprocess::MessageView<autoware_perception_msgs::msg::TrackedObjects>{objects_history_.msgs()},
+    preprocess::MessageView<autoware_perception_msgs::msg::TrafficLightGroupArray>{
+      traffic_signals_history_.msgs()},
     *route_ptr_};
 }
 
