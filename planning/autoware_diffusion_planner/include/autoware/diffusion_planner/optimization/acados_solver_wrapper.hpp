@@ -64,8 +64,7 @@ class AcadosSolverWrapper
 {
 public:
   AcadosSolverWrapper(
-    const TrajectoryOptimizationParams & params, double wheelbase_m,
-    double max_steering_angle_rad);
+    const TrajectoryOptimizationParams & params, double wheelbase_m, double max_steering_angle_rad);
   ~AcadosSolverWrapper();
 
   AcadosSolverWrapper(const AcadosSolverWrapper &) = delete;
@@ -83,8 +82,7 @@ public:
    */
   SolverSolution solve(
     const std::array<double, opt_nx> & initial_state,
-    const std::array<StageReference, opt_horizon> & references,
-    const SolverSolution * warm_start);
+    const std::array<StageReference, opt_horizon> & references, const SolverSolution * warm_start);
 
 private:
   struct Impl;

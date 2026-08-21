@@ -57,7 +57,15 @@ def rotated_position_block(yaw, w_lon, w_lat):
 def set_weights(solver, x0, refs, w_lon, w_lat):
     unscale = HORIZON_N / HORIZON_TF_S
     W = np.diag(
-        [0.0, 0.0, DEFAULT_WEIGHT_YAW, 0.0, 0.0, DEFAULT_WEIGHT_ACCELERATION, DEFAULT_WEIGHT_STEERING_RATE]
+        [
+            0.0,
+            0.0,
+            DEFAULT_WEIGHT_YAW,
+            0.0,
+            0.0,
+            DEFAULT_WEIGHT_ACCELERATION,
+            DEFAULT_WEIGHT_STEERING_RATE,
+        ]
     )
     for k in range(HORIZON_N):
         yaw = x0[2] if k == 0 else refs[k - 1, 2]

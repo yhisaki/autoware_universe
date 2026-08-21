@@ -19,6 +19,7 @@
 #include <autoware/cuda_utils/cuda_check_error.hpp>
 
 #include <chrono>
+#include <string>
 #include <utility>
 #include <vector>
 

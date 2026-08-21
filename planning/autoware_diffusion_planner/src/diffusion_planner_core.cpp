@@ -84,8 +84,8 @@ DiffusionPlannerCore::DiffusionPlannerCore(
   }
 #endif
   if (params_.road_border_avoidance.enable) {
-    road_border_avoidance_ =
-      std::make_unique<postprocess::RoadBorderAvoidance>(params_.road_border_avoidance, vehicle_info);
+    road_border_avoidance_ = std::make_unique<postprocess::RoadBorderAvoidance>(
+      params_.road_border_avoidance, vehicle_info);
   }
 }
 
@@ -289,8 +289,7 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
     }
 
     if (road_border_avoidance_) {
-      auto avoidance_result =
-        road_border_avoidance_->adjust(trajectory, kinematic_state.pose.pose);
+      auto avoidance_result = road_border_avoidance_->adjust(trajectory, kinematic_state.pose.pose);
       if (i == 0) {
         output.avoidance_debug.active = true;
         output.avoidance_debug.shifted_points =

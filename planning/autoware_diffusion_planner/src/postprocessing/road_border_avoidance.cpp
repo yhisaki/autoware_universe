@@ -59,8 +59,7 @@ Point2d nearest_point_on_linestring(const LineString2d & line, const Point2d & p
     const Eigen::Vector2d & b = line[i + 1];
     const Eigen::Vector2d ab = b - a;
     const double ab_sq = ab.squaredNorm();
-    const double t =
-      (ab_sq > 0.0) ? std::clamp((point - a).dot(ab) / ab_sq, 0.0, 1.0) : 0.0;
+    const double t = (ab_sq > 0.0) ? std::clamp((point - a).dot(ab) / ab_sq, 0.0, 1.0) : 0.0;
     const Eigen::Vector2d candidate = a + t * ab;
     const double sq_dist = (point - candidate).squaredNorm();
     if (sq_dist < min_sq_dist) {
@@ -171,8 +170,7 @@ RoadBorderAvoidanceResult RoadBorderAvoidance::adjust(
     };
 
     const LinearRing2d footprint = footprint_at(offset);
-    const Point2d position(
-      raw_x + lateral_left.x() * offset, raw_y + lateral_left.y() * offset);
+    const Point2d position(raw_x + lateral_left.x() * offset, raw_y + lateral_left.y() * offset);
 
     // The nearest overlapping border (if any) decides the shift direction.
     const LineString2d * offending_border =

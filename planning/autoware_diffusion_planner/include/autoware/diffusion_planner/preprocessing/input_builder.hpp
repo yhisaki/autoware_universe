@@ -35,6 +35,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace autoware::diffusion_planner
 {
