@@ -29,13 +29,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 using autoware::diffusion_planner::convert_to_internal_lanelet_map;
-using autoware::diffusion_planner::LaneSegment;
 using autoware_map_msgs::msg::LaneletMapBin;
 
 class LaneletIntegrationTest : public ::testing::Test
