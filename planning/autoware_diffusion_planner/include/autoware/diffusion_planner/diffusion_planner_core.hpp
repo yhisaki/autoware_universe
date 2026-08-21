@@ -17,6 +17,12 @@
 
 #include "autoware/diffusion_planner/dimensions.hpp"
 #include "autoware/diffusion_planner/inference/inference.hpp"
+#include "autoware/diffusion_planner/optimization/optimizer_params.hpp"
+#ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+#include "autoware/diffusion_planner/optimization/trajectory_optimizer.hpp"
+#endif
+#include "autoware/diffusion_planner/postprocessing/postprocessing_utils.hpp"
+#include "autoware/diffusion_planner/postprocessing/road_border_avoidance.hpp"
 #include "autoware/diffusion_planner/preprocessing/input_builder.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/map.hpp"
 #include "autoware/diffusion_planner/preprocessing/items/traffic_signals.hpp"
@@ -40,6 +46,7 @@
 #include <lanelet2_core/LaneletMap.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -59,12 +66,32 @@ using nav_msgs::msg::Odometry;
 using unique_identifier_msgs::msg::UUID;
 using InputDataMap = std::unordered_map<std::string, xt::xarray<float>>;
 
+struct TrajectoryOptimizationDebug
+{
+  bool attempted{false};
+  bool optimized{false};
+  int solver_status{0};
+  double solve_time_ms{0.0};
+};
+
+struct RoadBorderAvoidanceDebug
+{
+  bool active{false};
+  int shifted_points{0};
+  int unresolved_points{0};
+};
+
 struct PlannerOutput
 {
   Trajectory trajectory;
   CandidateTrajectories candidate_trajectories;
   PredictedObjects predicted_objects;
   TurnIndicatorsCommand turn_indicators_command;
+  std::optional<Trajectory> raw_trajectory;
+  TrajectoryOptimizationDebug optimization_debug;
+  std::optional<Trajectory> avoidance_adjusted_trajectory;
+  RoadBorderAvoidanceDebug avoidance_debug;
+  std::optional<Trajectory> pre_stop_fixing_trajectory;
 };
 
 struct DiffusionPlannerParams
@@ -80,6 +107,9 @@ struct DiffusionPlannerParams
   int batch_size;
   std::vector<double> noise_scale_list;
   double line_string_max_step_m;
+  optimization::TrajectoryOptimizationParams trajectory_optimization;
+  postprocess::RoadBorderAvoidanceParams road_border_avoidance;
+  postprocess::StopPointFixingParams stop_point_fixing;
 };
 
 /**
@@ -184,11 +214,14 @@ public:
    * @param inference_output Successful inference output.
    * @param timestamp The ROS time stamp for the messages.
    * @param generator_uuid The unique identifier for the planner instance.
+   * @param current_steering_angle_rad Measured steering angle used by the trajectory
+   *        optimization (estimated from the yaw rate when not available).
    * @return PlannerOutput containing all output messages.
    */
   PlannerOutput create_planner_output(
     const InferenceOutput & inference_output, const rclcpp::Time & timestamp,
-    const UUID & generator_uuid);
+    const UUID & generator_uuid,
+    const std::optional<double> & current_steering_angle_rad = std::nullopt);
 
   /**
    * @brief Get the first traffic light on the route for debugging.
@@ -221,6 +254,14 @@ private:
 
   // Inference engine
   std::unique_ptr<Inference> diffusion_planner_inference_{nullptr};
+
+#ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+  // acados-based trajectory optimization (nullptr when disabled by parameter)
+  std::unique_ptr<optimization::TrajectoryOptimizer> trajectory_optimizer_{nullptr};
+#endif
+
+  // Road border avoidance shift applied to the raw model output (nullptr when disabled)
+  std::unique_ptr<postprocess::RoadBorderAvoidance> road_border_avoidance_{nullptr};
 
   // Postprocessing
   std::vector<preprocess::SelectedAgent> selected_agents_;

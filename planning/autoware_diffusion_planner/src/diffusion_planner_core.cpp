@@ -32,6 +32,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -76,6 +77,16 @@ DiffusionPlannerCore::DiffusionPlannerCore(
     throw std::invalid_argument(
       "batch_size must be 1 or 2 and noise_scale must contain exactly batch_size values");
   }
+#ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+  if (params_.trajectory_optimization.enable) {
+    trajectory_optimizer_ = std::make_unique<optimization::TrajectoryOptimizer>(
+      params_.trajectory_optimization, vehicle_info, static_cast<size_t>(params_.batch_size));
+  }
+#endif
+  if (params_.road_border_avoidance.enable) {
+    road_border_avoidance_ =
+      std::make_unique<postprocess::RoadBorderAvoidance>(params_.road_border_avoidance, vehicle_info);
+  }
 }
 
 void DiffusionPlannerCore::load_model()
@@ -117,6 +128,9 @@ void DiffusionPlannerCore::set_map(
 {
   lane_segment_context_ = std::make_unique<preprocess::LaneSegmentContext>(
     lanelet_map_ptr, params_.line_string_max_step_m);
+  if (road_border_avoidance_ && lanelet_map_ptr) {
+    road_border_avoidance_->set_map(*lanelet_map_ptr);
+  }
 }
 
 DiffusionPlannerCore::BufferUpdateResult DiffusionPlannerCore::update_buffer(
@@ -246,7 +260,7 @@ InferenceResult DiffusionPlannerCore::run_inference(const InputDataMap & input_d
 
 PlannerOutput DiffusionPlannerCore::create_planner_output(
   const InferenceOutput & inference_output, const rclcpp::Time & timestamp,
-  const UUID & generator_uuid)
+  const UUID & generator_uuid, const std::optional<double> & current_steering_angle_rad)
 {
   // Derive the frame state from the raw message buffers
   const Odometry & kinematic_state = ego_history_.back();
@@ -267,8 +281,49 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
 
   // Trajectory and CandidateTrajectories
   for (int i = 0; i < params_.batch_size; i++) {
-    auto trajectory = postprocess::create_ego_trajectory(
-      agent_poses, timestamp, kinematic_state.pose.pose.position, i);
+    auto trajectory = postprocess::create_ego_trajectory(agent_poses, timestamp, i);
+
+    if (i == 0) {
+      // Keep the untouched model output for the debug topics.
+      output.raw_trajectory = trajectory;
+    }
+
+    if (road_border_avoidance_) {
+      auto avoidance_result =
+        road_border_avoidance_->adjust(trajectory, kinematic_state.pose.pose);
+      if (i == 0) {
+        output.avoidance_debug.active = true;
+        output.avoidance_debug.shifted_points =
+          static_cast<int>(avoidance_result.num_shifted_points);
+        output.avoidance_debug.unresolved_points =
+          static_cast<int>(avoidance_result.num_unresolved_points);
+        output.avoidance_adjusted_trajectory = avoidance_result.trajectory;
+      }
+      trajectory = std::move(avoidance_result.trajectory);
+    }
+
+#ifdef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+    if (trajectory_optimizer_) {
+      auto optimization_result = trajectory_optimizer_->optimize(
+        trajectory, kinematic_state, current_steering_angle_rad, static_cast<size_t>(i));
+      if (i == 0) {
+        output.optimization_debug.attempted = true;
+        output.optimization_debug.optimized = optimization_result.optimized;
+        output.optimization_debug.solver_status = optimization_result.solver_status;
+        output.optimization_debug.solve_time_ms = optimization_result.solve_time_ms;
+      }
+      trajectory = std::move(optimization_result.trajectory);
+    }
+#else
+    (void)current_steering_angle_rad;
+#endif
+
+    if (params_.stop_point_fixing.enable) {
+      if (i == 0) {
+        output.pre_stop_fixing_trajectory = trajectory;
+      }
+      postprocess::fix_stop_points(trajectory, params_.stop_point_fixing);
+    }
 
     if (i == 0) {
       // Use the first trajectory as the main output trajectory

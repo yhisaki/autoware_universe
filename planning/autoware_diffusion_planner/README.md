@@ -66,6 +66,37 @@ ros2 launch autoware_launch planning_simulator.launch.xml \
 
 ---
 
+## Trajectory optimization
+
+The raw model output is a noisy, position-only 80-point sequence (x, y, cos(yaw), sin(yaw) at t = 0.1 .. 8.0 s) that does not necessarily start at base_link. When `trajectory_optimization.enable` is true, an [acados](https://docs.acados.org/)-based OCP refines it before publishing:
+
+- **Model**: kinematic bicycle with steering-angle state — states (x, y, yaw, v, delta), inputs (acceleration, steering rate)
+- **Horizon**: N = 80, dt = 0.1 s (aligned 1:1 with the model output)
+- **Cost**: tracks the raw positions (and weakly heading), regularizes acceleration and steering rate for smoothness. The position error is split along the reference heading — longitudinal (schedule/velocity-profile freedom) and lateral (path deviation) errors are weighted separately via a per-stage rotated 2x2 weight block. No velocity/acceleration/steering references exist (the model outputs poses only, and none are fabricated by finite differences); the velocity profile emerges from the time-indexed position tracking, the comfort regularization, and the bounds
+- **Constraints**: initial state fixed to the current ego state (base_link pose, odometry velocity, measured steering angle), velocity/steering/input box bounds, soft lateral acceleration bound
+- **Output**: 80 points (t = 0.1 .. 8.0 s, same timing convention as the raw output) that are dynamically consistent with the current ego state, with velocity, acceleration, steering angle, and heading rate profiles
+
+The OCP is defined in `scripts/generate_solver.py` (vehicle model in `scripts/vehicle_model.py`); the C code is generated at build time into the build tree. Cost weights and constraint bounds are injected at node startup from ROS parameters, so tuning does not require rebuilding. Building requires acados at `ACADOS_SOURCE_DIR` (default `/opt/acados`) with its Python venv; without it the package builds with optimization support disabled.
+
+`scripts/run_optimizer_offline.py` solves the same OCP offline against a recorded or synthetic reference and plots the result for tuning:
+
+```bash
+cd scripts
+/opt/acados/.venv/bin/python3 run_optimizer_offline.py --output result.png
+```
+
+Debug topics (published while the optimizer runs): `~/debug/optimization/raw_trajectory` (raw model output), `~/debug/optimization/solver_status`, `~/debug/optimization/solve_time_ms`. On solver failure the raw trajectory is published unchanged.
+
+### Road border avoidance
+
+When `road_border_avoidance.enable` is true, the raw model output is checked against the road borders of the lanelet map before being handed to the trajectory optimization. For every trajectory point the ego footprint, inflated by `footprint_margin_m`, is placed at the point's pose and tested for overlap with the road border line strings (boost::geometry). Overlapping points are shifted perpendicular to their heading, away from the nearest border, in `shift_step_m` increments until the footprint clears all borders (the total offset is capped at `max_lateral_shift_m`; if the cap is reached the shift is kept as best effort and a warning is logged). With `propagate_shift` enabled (default) the offset is carried over to all subsequent points along each point's own lateral direction, so the path stays shifted after passing the border instead of snapping back to the raw output. Yaw and all other fields stay untouched. Debug topics: `~/debug/road_border_avoidance/adjusted_trajectory` (the shifted reference) and `~/debug/road_border_avoidance/shifted_point_count`.
+
+### Stop point fixing
+
+When `stop_point_fixing.enable` is true, the optimized trajectory is post-processed so that a stopping maneuver ends in a clean stop: if the trajectory decelerates continuously from its first point (all accelerations negative) down to a velocity at or below `velocity_threshold_mps`, that point and all subsequent points are fixed to its pose with zero velocity, acceleration, and heading rate. If any point accelerates before the threshold is reached, nothing is modified. The trajectory before the fixing is published on `~/debug/stop_point_fixing/unfixed_trajectory`. This prevents the small residual velocities of the optimized solution from making the vehicle creep past the intended stop point.
+
+---
+
 ## Parameters
 
 {{ json_to_markdown("planning/autoware_diffusion_planner/schema/diffusion_planner.schema.json") }}
@@ -84,6 +115,7 @@ Parameters can be set via YAML (see `config/diffusion_planner.param.yaml`).
 | `~/input/vector_map`      | autoware_map_msgs/msg/LaneletMapBin                 | Lanelet2 map               |
 | `~/input/route`           | autoware_planning_msgs/msg/LaneletRoute             | Route information          |
 | `~/input/turn_indicators` | autoware_vehicle_msgs/msg/TurnIndicatorsReport      | Turn indicator information |
+| `~/input/steering_status` | autoware_vehicle_msgs/msg/SteeringReport            | Measured steering angle (used by the trajectory optimization) |
 
 ## Outputs
 

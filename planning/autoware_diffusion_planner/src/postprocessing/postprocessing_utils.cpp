@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -46,16 +47,16 @@ namespace
 /**
  * @brief Converts a vector of poses to a Trajectory message.
  *
+ * Only pose information is filled: the model predicts positions and headings only, so
+ * velocity, acceleration, and steering are intentionally left at zero instead of being
+ * derived by finite differences (the trajectory optimization computes them consistently).
+ *
  * @param poses The vector of 4x4 transformation matrices representing poses.
- * @param base_x The base x position to calculate relative velocities.
- * @param base_y The base y position to calculate relative velocities.
- * @param base_z The base z position to calculate relative velocities.
  * @param stamp The ROS time stamp for the message.
  * @return A Trajectory message in map coordinates.
  */
 Trajectory get_trajectory_from_poses(
-  const std::vector<Eigen::Matrix4d> & poses, const double base_x, const double base_y,
-  double base_z, const rclcpp::Time & stamp);
+  const std::vector<Eigen::Matrix4d> & poses, const rclcpp::Time & stamp);
 };  // namespace
 
 std::vector<float> denormalize_prediction(const std::vector<float> & prediction)
@@ -157,12 +158,8 @@ PredictedObjects create_predicted_objects(
     // Extract poses for this neighbor (neighbor_id + 1 because 0 is ego)
     const auto & neighbor_poses = agent_poses[batch_index][neighbor_id + 1];
 
-    const auto & latest_pose = selected_agents.at(neighbor_id).current_pose_ego;
-    const double base_x = latest_pose(0, 3);
-    const double base_y = latest_pose(1, 3);
-    const double base_z = latest_pose(2, 3);
     const Trajectory trajectory_points_in_map_reference =
-      get_trajectory_from_poses(neighbor_poses, base_x, base_y, base_z, stamp);
+      get_trajectory_from_poses(neighbor_poses, stamp);
 
     PredictedObject object;
     const TrackedObject & object_info = selected_agents.at(neighbor_id).current_object;
@@ -196,8 +193,7 @@ PredictedObjects create_predicted_objects(
 
 Trajectory create_ego_trajectory(
   const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position,
-  const int64_t batch_index)
+  const rclcpp::Time & stamp, const int64_t batch_index)
 {
   const int64_t ego_index = 0;
 
@@ -211,11 +207,7 @@ Trajectory create_ego_trajectory(
   // Extract ego poses (ego_index = 0)
   const auto & ego_poses = agent_poses[batch_index][ego_index];
 
-  const double base_x = base_position.x;
-  const double base_y = base_position.y;
-  const double base_z = base_position.z;
-
-  return get_trajectory_from_poses(ego_poses, base_x, base_y, base_z, stamp);
+  return get_trajectory_from_poses(ego_poses, stamp);
 }
 
 int64_t count_valid_elements(
@@ -253,20 +245,48 @@ int64_t count_valid_elements(
   return valid_count;
 }
 
+std::optional<size_t> fix_stop_points(Trajectory & trajectory, const StopPointFixingParams & params)
+{
+  auto & points = trajectory.points;
+  // Walk from the start while the trajectory keeps decelerating; the first point at or
+  // below the velocity threshold within that prefix is the stop point. Any point with
+  // non-negative acceleration before that ends the search (the vehicle is not stopping).
+  auto stop_it = points.end();
+  for (auto it = points.begin(); it != points.end(); ++it) {
+    if (it->acceleration_mps2 >= -0.01F) {
+      break;
+    }
+    if (it->longitudinal_velocity_mps <= params.velocity_threshold_mps) {
+      stop_it = it;
+      break;
+    }
+  }
+  if (stop_it == points.end()) {
+    return std::nullopt;
+  }
+
+  const auto stop_pose = stop_it->pose;
+  const float stop_steering = stop_it->front_wheel_angle_rad;
+  for (auto it = stop_it; it != points.end(); ++it) {
+    it->pose = stop_pose;
+    it->longitudinal_velocity_mps = 0.0F;
+    it->lateral_velocity_mps = 0.0F;
+    it->acceleration_mps2 = 0.0F;
+    it->heading_rate_rps = 0.0F;
+    it->front_wheel_angle_rad = stop_steering;
+  }
+  return static_cast<size_t>(std::distance(points.begin(), stop_it));
+}
+
 namespace
 {
 Trajectory get_trajectory_from_poses(
-  const std::vector<Eigen::Matrix4d> & poses, const double base_x, const double base_y,
-  const double base_z, const rclcpp::Time & stamp)
+  const std::vector<Eigen::Matrix4d> & poses, const rclcpp::Time & stamp)
 {
   Trajectory trajectory;
   trajectory.header.stamp = stamp;
   trajectory.header.frame_id = "map";
   constexpr double dt = 0.1;
-
-  double prev_x = base_x;
-  double prev_y = base_y;
-  double prev_z = base_z;
 
   for (size_t i = 0; i < poses.size(); ++i) {
     const double curr_time = dt * static_cast<double>(i + 1);
@@ -287,24 +307,8 @@ Trajectory get_trajectory_from_poses(
     p.pose.orientation.z = quaternion.z();
     p.pose.orientation.w = quaternion.w();
 
-    const double distance = std::hypot(
-      p.pose.position.x - prev_x, p.pose.position.y - prev_y, p.pose.position.z - prev_z);
-    p.longitudinal_velocity_mps = static_cast<float>(distance / dt);
-
-    prev_x = p.pose.position.x;
-    prev_y = p.pose.position.y;
-    prev_z = p.pose.position.z;
     trajectory.points.push_back(p);
   }
-
-  const int64_t num_points = static_cast<int64_t>(poses.size());
-  // calculate acceleration
-  for (int64_t i = 0; i + 1 < num_points; ++i) {
-    const double v0 = trajectory.points[i].longitudinal_velocity_mps;
-    const double v1 = trajectory.points[i + 1].longitudinal_velocity_mps;
-    trajectory.points[i].acceleration_mps2 = static_cast<float>((v1 - v0) / dt);
-  }
-  trajectory.points.back().acceleration_mps2 = 0.0f;
 
   return trajectory;
 }

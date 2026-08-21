@@ -37,13 +37,14 @@
 #include <autoware_perception_msgs/msg/predicted_objects.hpp>
 #include <autoware_perception_msgs/msg/traffic_light_group.hpp>
 #include <autoware_planning_msgs/msg/trajectory.hpp>
+#include <autoware_vehicle_msgs/msg/steering_report.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_command.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace autoware::diffusion_planner
@@ -52,6 +53,7 @@ using autoware_internal_planning_msgs::msg::CandidateTrajectories;
 using autoware_map_msgs::msg::LaneletMapBin;
 using autoware_perception_msgs::msg::PredictedObjects;
 using autoware_planning_msgs::msg::Trajectory;
+using autoware_vehicle_msgs::msg::SteeringReport;
 using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using HADMapBin = autoware_map_msgs::msg::LaneletMapBin;
 using autoware::vehicle_info_utils::VehicleInfo;
@@ -116,7 +118,6 @@ class DiffusionPlanner : public rclcpp::Node
 {
 public:
   explicit DiffusionPlanner(const rclcpp::NodeOptions & options);
-  ~DiffusionPlanner();
 
 private:
   /**
@@ -196,6 +197,15 @@ private:
   rclcpp::Publisher<autoware_perception_msgs::msg::TrafficLightGroup>::SharedPtr
     pub_traffic_signal_{nullptr};
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_inference_time_{nullptr};
+  // Trajectory optimization debug topics (published when the optimizer runs)
+  rclcpp::Publisher<Trajectory>::SharedPtr pub_raw_trajectory_{nullptr};
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_optimization_status_{nullptr};
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_optimization_time_{nullptr};
+  // Road border avoidance debug topics (published when the avoidance runs)
+  rclcpp::Publisher<Trajectory>::SharedPtr pub_avoidance_trajectory_{nullptr};
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_avoidance_shifted_count_{nullptr};
+  // Stop point fixing debug topic (published when the fixing is enabled)
+  rclcpp::Publisher<Trajectory>::SharedPtr pub_pre_stop_fixing_trajectory_{nullptr};
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_{nullptr};
 
   template <typename MessageT>
@@ -212,6 +222,7 @@ private:
     sub_traffic_signals_{this, "~/input/traffic_signals", rclcpp::QoS{10}};
   BufferingPollingSubscriber<TurnIndicatorsReport> sub_turn_indicators_{
     this, "~/input/turn_indicators"};
+  NewestPollingSubscriber<SteeringReport> sub_steering_{this, "~/input/steering_status"};
   NewestPollingSubscriber<LaneletRoute> route_subscriber_{
     this, "~/input/route", rclcpp::QoS{1}.transient_local()};
   NewestPollingSubscriber<LaneletMapBin> vector_map_subscriber_{

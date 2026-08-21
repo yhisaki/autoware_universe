@@ -169,8 +169,9 @@ std::unordered_map<std::string, std::vector<float>> OrtModel::run(
     names.push_back(name);
     name_ptrs.push_back(names.back().c_str());
     const auto shape = input_shape(name, data.size());
-    tensors.push_back(Ort::Value::CreateTensor<float>(
-      memory_info_, const_cast<float *>(data.data()), data.size(), shape.data(), shape.size()));
+    tensors.push_back(
+      Ort::Value::CreateTensor<float>(
+        memory_info_, const_cast<float *>(data.data()), data.size(), shape.data(), shape.size()));
   }
   std::vector<const char *> output_ptrs;
   for (const auto & name : output_names) output_ptrs.push_back(name.c_str());

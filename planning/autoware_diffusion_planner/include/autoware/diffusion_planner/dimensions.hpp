@@ -19,7 +19,6 @@
 
 #include <array>
 #include <cstdint>
-#include <vector>
 
 namespace autoware::diffusion_planner
 {

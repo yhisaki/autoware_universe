@@ -94,6 +94,18 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
   time_keeper_ = std::make_shared<autoware_utils::TimeKeeper>(debug_processing_time_detail_pub_);
   pub_inference_time_ =
     this->create_publisher<std_msgs::msg::Float64>("~/debug/inference_time_ms", 1);
+  pub_raw_trajectory_ =
+    this->create_publisher<Trajectory>("~/debug/optimization/raw_trajectory", 1);
+  pub_optimization_status_ =
+    this->create_publisher<std_msgs::msg::Int32>("~/debug/optimization/solver_status", 1);
+  pub_optimization_time_ =
+    this->create_publisher<std_msgs::msg::Float64>("~/debug/optimization/solve_time_ms", 1);
+  pub_avoidance_trajectory_ =
+    this->create_publisher<Trajectory>("~/debug/road_border_avoidance/adjusted_trajectory", 1);
+  pub_avoidance_shifted_count_ = this->create_publisher<std_msgs::msg::Int32>(
+    "~/debug/road_border_avoidance/shifted_point_count", 1);
+  pub_pre_stop_fixing_trajectory_ =
+    this->create_publisher<Trajectory>("~/debug/stop_point_fixing/unfixed_trajectory", 1);
 
   set_up_params();
   vehicle_info_ = autoware::vehicle_info_utils::VehicleInfoUtils(*this).getVehicleInfo();
@@ -143,8 +155,6 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
     std::bind(&DiffusionPlanner::on_parameter, this, std::placeholders::_1));
 }
 
-DiffusionPlanner::~DiffusionPlanner() = default;
-
 void DiffusionPlanner::set_up_params()
 {
   // node params
@@ -160,6 +170,64 @@ void DiffusionPlanner::set_up_params()
   params_.batch_size = this->declare_parameter<int>("batch_size", 1);
   params_.noise_scale_list = this->declare_parameter<std::vector<double>>("noise_scale", {1.0});
   params_.line_string_max_step_m = this->declare_parameter<double>("line_string_max_step_m", 5.0);
+
+  // trajectory optimization params (static; changing them requires a restart)
+  auto & opt = params_.trajectory_optimization;
+  opt.enable = this->declare_parameter<bool>("trajectory_optimization.enable", false);
+  opt.weight_longitudinal =
+    this->declare_parameter<double>("trajectory_optimization.weight_longitudinal", 0.5);
+  opt.weight_lateral =
+    this->declare_parameter<double>("trajectory_optimization.weight_lateral", 0.5);
+  opt.weight_yaw = this->declare_parameter<double>("trajectory_optimization.weight_yaw", 0.05);
+  opt.weight_acceleration =
+    this->declare_parameter<double>("trajectory_optimization.weight_acceleration", 0.1);
+  opt.weight_steering_rate =
+    this->declare_parameter<double>("trajectory_optimization.weight_steering_rate", 10.0);
+  opt.terminal_weight_scale =
+    this->declare_parameter<double>("trajectory_optimization.terminal_weight_scale", 2.5);
+  opt.min_velocity_mps =
+    this->declare_parameter<double>("trajectory_optimization.min_velocity_mps", 0.0);
+  opt.max_velocity_mps =
+    this->declare_parameter<double>("trajectory_optimization.max_velocity_mps", 30.0);
+  opt.min_acceleration_mps2 =
+    this->declare_parameter<double>("trajectory_optimization.min_acceleration_mps2", -4.0);
+  opt.max_acceleration_mps2 =
+    this->declare_parameter<double>("trajectory_optimization.max_acceleration_mps2", 3.0);
+  opt.max_steering_rate_rps =
+    this->declare_parameter<double>("trajectory_optimization.max_steering_rate_rps", 1.0);
+  opt.max_lateral_acceleration_mps2 =
+    this->declare_parameter<double>("trajectory_optimization.max_lateral_acceleration_mps2", 3.0);
+  opt.max_sqp_iterations =
+    this->declare_parameter<int>("trajectory_optimization.max_sqp_iterations", 50);
+#ifndef AUTOWARE_DIFFUSION_PLANNER_USE_ACADOS
+  if (opt.enable) {
+    RCLCPP_WARN(
+      get_logger(),
+      "trajectory_optimization.enable is true but this build has no acados support; "
+      "trajectory optimization is disabled.");
+    opt.enable = false;
+  }
+#endif
+
+  // road border avoidance params (static; changing them requires a restart)
+  auto & avoidance = params_.road_border_avoidance;
+  avoidance.enable = this->declare_parameter<bool>("road_border_avoidance.enable", false);
+  avoidance.footprint_margin_m =
+    this->declare_parameter<double>("road_border_avoidance.footprint_margin_m", 0.2);
+  avoidance.search_radius_m =
+    this->declare_parameter<double>("road_border_avoidance.search_radius_m", 120.0);
+  avoidance.shift_step_m =
+    this->declare_parameter<double>("road_border_avoidance.shift_step_m", 0.1);
+  avoidance.max_lateral_shift_m =
+    this->declare_parameter<double>("road_border_avoidance.max_lateral_shift_m", 1.5);
+  avoidance.propagate_shift =
+    this->declare_parameter<bool>("road_border_avoidance.propagate_shift", true);
+
+  // stop point fixing params (static; changing them requires a restart)
+  auto & stop_fixing = params_.stop_point_fixing;
+  stop_fixing.enable = this->declare_parameter<bool>("stop_point_fixing.enable", false);
+  stop_fixing.velocity_threshold_mps =
+    this->declare_parameter<double>("stop_point_fixing.velocity_threshold_mps", 0.3);
 
   // planning factor params
   planning_factor_params_.enable_stop =
@@ -455,9 +523,15 @@ void DiffusionPlanner::on_timer()
   inference_time_msg.data = inference_result->inference_time_ms;
   pub_inference_time_->publish(inference_time_msg);
 
+  std::optional<double> current_steering_angle_rad;
+  if (const auto steering_ptr = sub_steering_.take_data()) {
+    current_steering_angle_rad = static_cast<double>(steering_ptr->steering_tire_angle);
+  }
+
   PlannerOutput planner_output;
   try {
-    planner_output = core_->create_planner_output(*inference_result, frame_time, generator_uuid_);
+    planner_output = core_->create_planner_output(
+      *inference_result, frame_time, generator_uuid_, current_steering_angle_rad);
   } catch (const std::exception & e) {
     RCLCPP_ERROR_STREAM(get_logger(), "Postprocessing failed: " << e.what());
     diagnostics_inference_->update_level_and_message(DiagnosticStatus::ERROR, e.what());
@@ -469,6 +543,49 @@ void DiffusionPlanner::on_timer()
   pub_trajectories_->publish(planner_output.candidate_trajectories);
   pub_objects_->publish(planner_output.predicted_objects);
   pub_turn_indicators_->publish(planner_output.turn_indicators_command);
+
+  const auto & avoidance_debug = planner_output.avoidance_debug;
+  if (avoidance_debug.active) {
+    if (planner_output.avoidance_adjusted_trajectory) {
+      pub_avoidance_trajectory_->publish(*planner_output.avoidance_adjusted_trajectory);
+    }
+    std_msgs::msg::Int32 shifted_count_msg;
+    shifted_count_msg.data = avoidance_debug.shifted_points + avoidance_debug.unresolved_points;
+    pub_avoidance_shifted_count_->publish(shifted_count_msg);
+    if (avoidance_debug.unresolved_points > 0) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
+        "Road border avoidance could not clear %d trajectory points within the maximum "
+        "lateral shift.",
+        avoidance_debug.unresolved_points);
+    }
+  }
+
+  const auto & optimization_debug = planner_output.optimization_debug;
+  if (optimization_debug.attempted || avoidance_debug.active) {
+    if (planner_output.raw_trajectory) {
+      pub_raw_trajectory_->publish(*planner_output.raw_trajectory);
+    }
+  }
+  if (planner_output.pre_stop_fixing_trajectory) {
+    pub_pre_stop_fixing_trajectory_->publish(*planner_output.pre_stop_fixing_trajectory);
+  }
+  if (optimization_debug.attempted) {
+    std_msgs::msg::Int32 status_msg;
+    status_msg.data = optimization_debug.solver_status;
+    pub_optimization_status_->publish(status_msg);
+    std_msgs::msg::Float64 solve_time_msg;
+    solve_time_msg.data = optimization_debug.solve_time_ms;
+    pub_optimization_time_->publish(solve_time_msg);
+    if (!optimization_debug.optimized) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *this->get_clock(), constants::LOG_THROTTLE_INTERVAL_MS,
+        "Trajectory optimization failed (acados status %d); publishing the raw trajectory.",
+        optimization_debug.solver_status);
+      diagnostics_inference_->update_level_and_message(
+        DiagnosticStatus::WARN, "Trajectory optimization failed");
+    }
+  }
 
   publish_planning_factor(planner_output.trajectory);
 
