@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -49,6 +50,51 @@ TEST(PostprocessingUtilsTest, CreateTrajectoryAndMultipleTrajectories)
   const auto agent_poses = postprocess::parse_predictions(data, transform);
   auto traj = postprocess::create_ego_trajectory(agent_poses, stamp, 0);
   ASSERT_EQ(traj.points.size(), expected_points);
+}
+
+TEST(PostprocessingUtilsTest, FixStopPointsAfterConfiguredDecelerationDuration)
+{
+  Trajectory trajectory;
+  for (size_t i = 0; i < 7; ++i) {
+    auto & point = trajectory.points.emplace_back();
+    const double time = 0.5 * static_cast<double>(i);
+    point.time_from_start.sec = static_cast<int32_t>(time);
+    point.time_from_start.nanosec = static_cast<uint32_t>((time - std::floor(time)) * 1.0e9);
+    point.pose.position.x = static_cast<double>(i);
+    point.longitudinal_velocity_mps = i >= 5 ? 0.2F : 2.0F;
+    point.acceleration_mps2 = i >= 3 ? -1.0F : 0.0F;
+  }
+
+  postprocess::StopPointFixingParams params;
+  params.velocity_threshold_mps = 0.3;
+  params.min_deceleration_duration_sec = 1.0;
+  const auto stop_index = postprocess::fix_stop_points(trajectory, params);
+
+  ASSERT_EQ(stop_index, 5U);
+  EXPECT_DOUBLE_EQ(trajectory.points[4].pose.position.x, 4.0);
+  for (size_t i = 5; i < trajectory.points.size(); ++i) {
+    EXPECT_DOUBLE_EQ(trajectory.points[i].pose.position.x, 5.0);
+    EXPECT_FLOAT_EQ(trajectory.points[i].longitudinal_velocity_mps, 0.0F);
+    EXPECT_FLOAT_EQ(trajectory.points[i].acceleration_mps2, 0.0F);
+  }
+}
+
+TEST(PostprocessingUtilsTest, FixStopPointsResetsDecelerationDuration)
+{
+  Trajectory trajectory;
+  for (size_t i = 0; i < 5; ++i) {
+    auto & point = trajectory.points.emplace_back();
+    point.time_from_start.sec = static_cast<int32_t>(i);
+    point.pose.position.x = static_cast<double>(i);
+    point.longitudinal_velocity_mps = 0.2F;
+    point.acceleration_mps2 = -1.0F;
+  }
+  trajectory.points[2].acceleration_mps2 = 0.0F;
+
+  postprocess::StopPointFixingParams params;
+  params.min_deceleration_duration_sec = 2.0;
+  EXPECT_FALSE(postprocess::fix_stop_points(trajectory, params).has_value());
+  EXPECT_DOUBLE_EQ(trajectory.points.back().pose.position.x, 4.0);
 }
 
 }  // namespace autoware::diffusion_planner::test

@@ -248,15 +248,26 @@ int64_t count_valid_elements(
 std::optional<size_t> fix_stop_points(Trajectory & trajectory, const StopPointFixingParams & params)
 {
   auto & points = trajectory.points;
-  // Walk from the start while the trajectory keeps decelerating; the first point at or
-  // below the velocity threshold within that prefix is the stop point. Any point with
-  // non-negative acceleration before that ends the search (the vehicle is not stopping).
   auto stop_it = points.end();
+  auto deceleration_start_it = points.end();
   for (auto it = points.begin(); it != points.end(); ++it) {
     if (it->acceleration_mps2 >= -0.01F) {
-      break;
+      deceleration_start_it = points.end();
+      continue;
     }
-    if (it->longitudinal_velocity_mps <= params.velocity_threshold_mps) {
+
+    if (deceleration_start_it == points.end()) {
+      deceleration_start_it = it;
+    }
+    const auto & start_time = deceleration_start_it->time_from_start;
+    const auto & current_time = it->time_from_start;
+    const double deceleration_duration = static_cast<double>(current_time.sec - start_time.sec) +
+                                         1.0e-9 * static_cast<double>(
+                                                    static_cast<int64_t>(current_time.nanosec) -
+                                                    static_cast<int64_t>(start_time.nanosec));
+    if (
+      deceleration_duration >= params.min_deceleration_duration_sec &&
+      it->longitudinal_velocity_mps <= params.velocity_threshold_mps) {
       stop_it = it;
       break;
     }

@@ -207,7 +207,13 @@
               "type": "number",
               "default": 0.3,
               "minimum": 0.0,
-              "description": "Stop detection velocity threshold [m/s]; the stop point is the first point at or below this velocity reached while all accelerations from the trajectory start are negative"
+              "description": "Stop detection velocity threshold [m/s]"
+            },
+            "min_deceleration_duration_sec": {
+              "type": "number",
+              "default": 1.0,
+              "minimum": 0.0,
+              "description": "Minimum continuous deceleration duration required before fixing the stop point [s]"
             }
           },
           "required": ["enable"]

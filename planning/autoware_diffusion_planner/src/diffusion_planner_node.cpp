@@ -250,6 +250,8 @@ void DiffusionPlanner::set_up_params()
   stop_fixing.enable = this->declare_parameter<bool>("stop_point_fixing.enable", false);
   stop_fixing.velocity_threshold_mps =
     this->declare_parameter<double>("stop_point_fixing.velocity_threshold_mps", 0.3);
+  stop_fixing.min_deceleration_duration_sec =
+    this->declare_parameter<double>("stop_point_fixing.min_deceleration_duration_sec", 1.0);
 
   // planning factor params
   planning_factor_params_.enable_stop =

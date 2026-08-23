@@ -93,7 +93,7 @@ When `road_border_avoidance.enable` is true, the raw model output is checked aga
 
 ### Stop point fixing
 
-When `stop_point_fixing.enable` is true, the optimized trajectory is post-processed so that a stopping maneuver ends in a clean stop: if the trajectory decelerates continuously from its first point (all accelerations negative) down to a velocity at or below `velocity_threshold_mps`, that point and all subsequent points are fixed to its pose with zero velocity, acceleration, and heading rate. If any point accelerates before the threshold is reached, nothing is modified. The trajectory before the fixing is published on `~/debug/stop_point_fixing/unfixed_trajectory`. This prevents the small residual velocities of the optimized solution from making the vehicle creep past the intended stop point.
+When `stop_point_fixing.enable` is true, the optimized trajectory is post-processed so that a stopping maneuver ends in a clean stop. The first point at or below `velocity_threshold_mps` after at least `min_deceleration_duration_sec` of continuous deceleration becomes the stop point. A non-decelerating point resets the measured duration. The stop point and all subsequent points are fixed to its pose with zero velocity, acceleration, and heading rate. The trajectory before the fixing is published on `~/debug/stop_point_fixing/unfixed_trajectory`. This prevents the small residual velocities of the optimized solution from making the vehicle creep past the intended stop point.
 
 ---
 

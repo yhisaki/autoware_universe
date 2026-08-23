@@ -35,7 +35,8 @@
       propagate_shift: true       # carry the offset over to all subsequent points
     stop_point_fixing:
       enable: false
-      velocity_threshold_mps: 0.3  # freeze the tail at the first point with velocity <= this while decelerating from the start [m/s]
+      velocity_threshold_mps: 0.3  # stop detection velocity threshold [m/s]
+      min_deceleration_duration_sec: 1.0  # required continuous deceleration before fixing [s]
     planning_factor:
       enable_stop: true
       enable_slowdown: false
