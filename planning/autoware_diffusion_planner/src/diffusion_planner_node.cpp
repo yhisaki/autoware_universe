@@ -23,6 +23,7 @@
 #include <autoware_utils_uuid/uuid_helper.hpp>
 #include <rclcpp/duration.hpp>
 #include <rclcpp/logging.hpp>
+#include <xtensor/xview.hpp>
 
 #include <algorithm>
 #include <array>
@@ -45,6 +46,9 @@ using diagnostic_msgs::msg::DiagnosticStatus;
 
 namespace
 {
+// Ego velocity [m/s] written into the model input while the start service is enabled.
+constexpr float start_service_ego_velocity_mps = 1.0F;
+
 std::string compute_file_hash_hex(const std::string & path)
 {
   constexpr std::size_t HASH_READ_BUFFER_BYTES = 64 * 1024;
@@ -153,6 +157,24 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
   // Parameter Callback
   set_param_res_ = add_on_set_parameters_callback(
     std::bind(&DiffusionPlanner::on_parameter, this, std::placeholders::_1));
+
+  srv_start_ = this->create_service<std_srvs::srv::SetBool>(
+    "~/service/start",
+    std::bind(
+      &DiffusionPlanner::on_start_service, this, std::placeholders::_1, std::placeholders::_2));
+}
+
+void DiffusionPlanner::on_start_service(
+  const std_srvs::srv::SetBool::Request::SharedPtr request,
+  const std_srvs::srv::SetBool::Response::SharedPtr response)
+{
+  start_velocity_override_enabled_ = request->data;
+  RCLCPP_INFO(
+    get_logger(), "Start service: ego velocity override %s",
+    start_velocity_override_enabled_ ? "enabled (1 m/s)" : "disabled");
+  response->success = true;
+  response->message = start_velocity_override_enabled_ ? "ego velocity override enabled (1 m/s)"
+                                                       : "ego velocity override disabled";
 }
 
 void DiffusionPlanner::set_up_params()
@@ -473,6 +495,14 @@ void DiffusionPlanner::on_timer()
   }
   InputDataMap input_data_map = std::move(input_data_result.value());
   const rclcpp::Time frame_time = core_->frame_time();
+
+  if (start_velocity_override_enabled_) {
+    // Make the model plan as if the vehicle were already moving: overwrite every ego
+    // velocity entry of the input (all history timesteps, all batches) with 1 m/s.
+    auto & ego_agent_past = input_data_map.at("ego_agent_past");
+    xt::view(ego_agent_past, xt::all(), xt::all(), EGO_AGENT_PAST_IDX_VELOCITY) =
+      start_service_ego_velocity_mps;
+  }
 
   const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(core_->ego_pose());
   publish_debug_markers(input_data_map, ego_to_map_transform, frame_time);

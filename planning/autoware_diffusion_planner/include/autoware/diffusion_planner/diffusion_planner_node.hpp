@@ -41,6 +41,7 @@
 #include <autoware_vehicle_msgs/msg/turn_indicators_command.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include <memory>
@@ -173,6 +174,15 @@ private:
    */
   SetParametersResult on_parameter(const std::vector<rclcpp::Parameter> & parameters);
 
+  /**
+   * @brief Callback for the start service. While enabled, the ego velocity entries of
+   * the model input (ego_agent_past) are overwritten with 1 m/s so the model plans as if
+   * the vehicle were already moving.
+   */
+  void on_start_service(
+    const std_srvs::srv::SetBool::Request::SharedPtr request,
+    const std_srvs::srv::SetBool::Response::SharedPtr response);
+
   // Core logic instance
   std::unique_ptr<DiffusionPlannerCore> core_;
 
@@ -206,6 +216,10 @@ private:
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_avoidance_shifted_count_{nullptr};
   // Stop point fixing debug topic (published when the fixing is enabled)
   rclcpp::Publisher<Trajectory>::SharedPtr pub_pre_stop_fixing_trajectory_{nullptr};
+
+  // Start service: while enabled, ego velocity in the model input is overwritten (1 m/s)
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_start_{nullptr};
+  bool start_velocity_override_enabled_{false};
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_{nullptr};
 
   template <typename MessageT>
