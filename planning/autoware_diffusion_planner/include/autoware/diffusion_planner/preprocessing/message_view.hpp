@@ -30,7 +30,7 @@ public:
 
   MessageView() = default;
 
-  MessageView(const std::deque<MessageT> & messages)
+  explicit MessageView(const std::deque<MessageT> & messages)
   {
     messages_.reserve(messages.size());
     for (const auto & message : messages) {

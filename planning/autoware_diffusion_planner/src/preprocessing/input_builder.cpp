@@ -40,8 +40,9 @@ std::unique_ptr<LaneSegmentContext> build_map_context(
 }
 
 InputDataResult create_input_data_map(
-  const FrameInputs & frame_inputs, const LaneSegmentContext & map_context, const VehicleSpec &,
-  const InputBuilderParams & params, std::vector<SelectedAgent> * selected_agents_out)
+  const FrameInputs & frame_inputs, const LaneSegmentContext & map_context,
+  const VehicleSpec & vehicle_spec, const InputBuilderParams & params,
+  std::vector<SelectedAgent> * selected_agents_out)
 {
   if (selected_agents_out != nullptr) {
     selected_agents_out->clear();
@@ -133,8 +134,8 @@ InputDataResult create_input_data_map(
     create_goal_pose(frame_inputs.route.goal_pose, map_to_ego_transform);
 
   // Ego shape
-  input_data_map["ego_shape"] =
-    create_ego_shape(5.7111101150512695, 7.2368998527526855, 2.4274098873138428);
+  input_data_map["ego_shape"] = create_ego_shape(
+    vehicle_spec.base_link_to_front, vehicle_spec.vehicle_length, vehicle_spec.vehicle_width);
 
   // Retained in generated datasets for future model versions. The current
   // sampler ONNX does not consume this tensor.

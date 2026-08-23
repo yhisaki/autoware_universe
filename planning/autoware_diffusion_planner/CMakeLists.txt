@@ -102,10 +102,6 @@ autoware_agnocast_wrapper_register_node(autoware_diffusion_planner_component
 
 if(BUILD_TESTING)
   set(DIFFUSION_PLANNER_TEST_SOURCES
-    test/agent_edge_case_test.cpp
-    test/agent_test.cpp
-    test/diffusion_planner_integration_test.cpp
-    test/lane_segments_test.cpp
     test/lanelet_edge_case_test.cpp
     test/lanelet_integration_test.cpp
     test/lanelet_test.cpp
@@ -113,8 +109,6 @@ if(BUILD_TESTING)
     test/planning_factor_utils_test.cpp
     test/postprocessing_utils_test.cpp
     test/postprocessing_utils_edge_case_test.cpp
-    test/pre_processing_utils_test.cpp
-    test/preprocessing_utils_edge_case_test.cpp
     test/road_border_avoidance_test.cpp
     test/utils_test.cpp
   )

@@ -4,7 +4,7 @@
     model:
       backend: "tensorrt" # "tensorrt" "ort_cpu" "ort_cuda" "ort_tensorrt"
       precision: "fp32"
-      use_cuda_graph: false
+      use_cuda_graph: true
       onnx_model_path: $(var data_path)/diffusion_planner/diffusion_planner_sampler.onnx
     planning_frequency_hz: 10.0
     traffic_light_group_msg_timeout_seconds: 0.2
