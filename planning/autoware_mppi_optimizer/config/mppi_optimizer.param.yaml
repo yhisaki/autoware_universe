@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     mppi_optimizer:
-      enabled: true
+      enabled: false
       shadow_mode: false
 
       # FirstOrderDubinsBicycleCostParams (see first_order_dubins_bicycle_cost.cuh)
