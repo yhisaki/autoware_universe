@@ -16,7 +16,6 @@
 
 #include "autoware/diffusion_planner/constants.hpp"
 #include "autoware/diffusion_planner/dimensions.hpp"
-#include "autoware/diffusion_planner/mppi_utils.hpp"
 #include "autoware/diffusion_planner/preprocessing/preprocessing_utils.hpp"
 #include "autoware/diffusion_planner/utils/marker_utils.hpp"
 #include "autoware/diffusion_planner/utils/utils.hpp"
@@ -26,7 +25,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <fstream>
 #include <functional>
@@ -125,7 +123,6 @@ DiffusionPlanner::DiffusionPlanner(const rclcpp::NodeOptions & options)
       this, "diffusion_planner");
 
   diagnostics_inference_ = std::make_unique<DiagnosticsInterface>(this, "inference_status");
-  diagnostics_mppi_cost_ = std::make_unique<DiagnosticsInterface>(this, "mppi_cost_breakdown");
   try {
     load_model();
     if (params_.build_only) {

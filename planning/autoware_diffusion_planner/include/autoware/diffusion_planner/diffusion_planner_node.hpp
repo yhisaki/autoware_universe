@@ -257,7 +257,6 @@ private:
   VehicleInfo vehicle_info_;
 
   std::unique_ptr<DiagnosticsInterface> diagnostics_inference_;
-  std::unique_ptr<DiagnosticsInterface> diagnostics_mppi_cost_;
   std::shared_ptr<const lanelet::LaneletMap> lanelet_map_ptr_{nullptr};
 
   std::unique_ptr<autoware_utils_system::StopWatch<std::chrono::milliseconds>> stop_watch_ptr_;
