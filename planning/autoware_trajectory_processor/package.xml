@@ -23,12 +23,14 @@
   <depend>autoware_internal_debug_msgs</depend>
   <depend>autoware_internal_planning_msgs</depend>
   <depend>autoware_lanelet2_utils</depend>
+  <depend>autoware_map_msgs</depend>
   <depend>autoware_motion_utils</depend>
   <depend>autoware_object_recognition_utils</depend>
   <depend>autoware_obstacle_proximity_checker</depend>
   <depend>autoware_osqp_interface</depend>
   <depend>autoware_path_optimizer</depend>
   <depend>autoware_path_smoother</depend>
+  <depend>autoware_perception_msgs</depend>
   <depend>autoware_planning_factor_interface</depend>
   <depend>autoware_planning_msgs</depend>
   <depend>autoware_qp_interface</depend>
@@ -40,6 +42,7 @@
   <depend>autoware_utils_math</depend>
   <depend>autoware_utils_rclcpp</depend>
   <depend>autoware_vehicle_info_utils</depend>
+  <depend>autoware_vehicle_msgs</depend>
   <depend>generate_parameter_library</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
@@ -48,6 +51,7 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
   <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_eigen</depend>

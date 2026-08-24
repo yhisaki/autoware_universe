@@ -1,6 +1,6 @@
 # Autoware MPPI Optimizer
 
-The `autoware_mppi_optimizer` package optimizes trajectories using Model Predictive Path Integral (MPPI) control.
+The `autoware_mppi_optimizer` package optimizes trajectories with Model Predictive Path Integral (MPPI) control. Its trajectory processor plugin applies MPPI to the first candidate in an ordered processing pipeline.
 
 ## Overview
 
@@ -22,28 +22,23 @@ autoware_mppi_optimizer/
 - CUDA Toolkit (curand, cufft)
 - Eigen3
 
-## Inputs / Outputs
+## Trajectory processor plugin
 
-| Topic                 | Type                                    | Description          |
-| --------------------- | --------------------------------------- | -------------------- |
-| `~/input/trajectory`  | `autoware_planning_msgs/msg/Trajectory` | Reference trajectory |
-| `~/input/odometry`    | `nav_msgs/msg/Odometry`                 | Current ego state    |
-| `~/output/trajectory` | `autoware_planning_msgs/msg/Trajectory` | Optimized trajectory |
+Configure `autoware::mppi_optimizer::plugin::TrajectoryMppiOptimizer` in the `plugin_names` list of `autoware_trajectory_processor`. Place it first to optimize the primary candidate before other modifiers and optimizers.
 
-## Launch
+The plugin uses odometry, acceleration, steering, tracked objects, route, and raw lanelet map data from the processor. It returns the input points when MPPI is disabled, runs in shadow mode, rejects a result, or reports an error.
 
-```bash
-ros2 launch autoware_mppi_optimizer mppi_optimizer.launch.xml
-```
+Plugin parameters are below `mppi_optimizer`. The `enabled` and `shadow_mode` parameters control result application. Debug topics are below `~/debug/mppi` in the trajectory processor node.
 
 ## Offline debug logging + retune
 
-Enable CSV logging from the diffusion planner / MPPI params:
+Enable CSV logging from the MPPI plugin parameters:
 
 ```yaml
-enable_debug_trajectory_log: true
-# Empty -> $XDG_CACHE_HOME/autoware/mppi_debug_log or $HOME/.cache/autoware/mppi_debug_log
-debug_trajectory_log_directory: ""
+mppi_optimizer:
+  enable_debug_trajectory_log: true
+  # Empty -> $XDG_CACHE_HOME/autoware/mppi_debug_log or $HOME/.cache/autoware/mppi_debug_log
+  debug_trajectory_log_directory: ""
 ```
 
 Each cycle writes:
@@ -74,7 +69,7 @@ min_optimization_length: 0.0
 use_last_control_as_nominal: true
 ```
 
-Then rebuild / restart the diffusion planner and compare live MPPI to offline retune.
+Then restart the trajectory processor and compare live MPPI to offline retune.
 
 Notes:
 

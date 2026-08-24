@@ -14,6 +14,8 @@ This planner generates smooth, feasible, and safe trajectories by considering:
 
 It is implemented as a ROS 2 component node, making it easy to integrate into Autoware-based stacks. The node is aimed at working within the proposed [Autoware new planning framework](https://github.com/tier4/new_planning_framework).
 
+The node publishes raw diffusion trajectories. The downstream `autoware_trajectory_processor` pipeline applies optional optimizers, including MPPI, and safety modifiers.
+
 ---
 
 ## How to use

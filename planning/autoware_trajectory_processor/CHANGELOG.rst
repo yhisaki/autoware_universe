@@ -2,6 +2,10 @@
 Changelog for package autoware_trajectory_processor
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Add candidate metadata and optional MPPI input data to the shared plugin snapshot.
+
 0.52.0 (2026-06-30)
 -------------------
 * Merge remote-tracking branch 'origin/main' into tmp/bot/bump_version_base

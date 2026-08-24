@@ -4,6 +4,10 @@ project(autoware_mppi_optimizer)
 find_package(autoware_cmake REQUIRED)
 autoware_package()
 
+generate_parameter_library(trajectory_mppi_optimizer_parameters
+  param/trajectory_mppi_optimizer_parameters.yaml
+)
+
 ament_auto_add_library(mppi_trajectory_utils SHARED
   src/first_order_dubins/trajectory_utils.cpp
 )
@@ -59,6 +63,8 @@ endif()
 
 if(CUDA_AVAIL AND TRT_AVAIL)
   find_package(MPPI-Generic REQUIRED)
+  pluginlib_export_plugin_description_file(
+    autoware_trajectory_processor trajectory_processor_plugins.xml)
   add_library(mppi_extensions INTERFACE)
   add_library(MppiExtensions::extensions ALIAS mppi_extensions)
   target_include_directories(mppi_extensions BEFORE INTERFACE
@@ -128,6 +134,15 @@ if(CUDA_AVAIL AND TRT_AVAIL)
     src/first_order_dubins_mppi_vehicle_params_ros.cpp
   )
   target_link_libraries(${PROJECT_NAME} first_order_dubins_mppi)
+
+  ament_auto_add_library(autoware_mppi_trajectory_processor_plugin SHARED
+    src/trajectory_mppi_optimizer.cpp
+  )
+  target_link_libraries(autoware_mppi_trajectory_processor_plugin
+    first_order_dubins_mppi
+    trajectory_mppi_optimizer_parameters
+    ${PROJECT_NAME}
+  )
 
   add_executable(mppi_offline_retune
     src/tools/mppi_offline_retune.cpp

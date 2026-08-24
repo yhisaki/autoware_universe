@@ -30,9 +30,11 @@
 #include <autoware_internal_planning_msgs/msg/candidate_trajectories.hpp>
 #include <autoware_map_msgs/msg/lanelet_map_bin.hpp>
 #include <autoware_perception_msgs/msg/predicted_objects.hpp>
+#include <autoware_perception_msgs/msg/tracked_objects.hpp>
 #include <autoware_perception_msgs/msg/traffic_light_group_array.hpp>
 #include <autoware_planning_msgs/msg/lanelet_route.hpp>
 #include <autoware_planning_msgs/msg/trajectory.hpp>
+#include <autoware_vehicle_msgs/msg/steering_report.hpp>
 #include <geometry_msgs/msg/accel_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -60,6 +62,8 @@ private:
   using Odometry = nav_msgs::msg::Odometry;
   using Acceleration = geometry_msgs::msg::AccelWithCovarianceStamped;
   using PredictedObjects = autoware_perception_msgs::msg::PredictedObjects;
+  using TrackedObjects = autoware_perception_msgs::msg::TrackedObjects;
+  using SteeringReport = autoware_vehicle_msgs::msg::SteeringReport;
   using PointCloud2 = sensor_msgs::msg::PointCloud2;
   using Plugin = plugin::TrajectoryProcessorPluginBase;
 
@@ -93,8 +97,12 @@ private:
     this, "~/input/odometry"};
   autoware_utils_rclcpp::InterProcessPollingSubscriber<Acceleration> sub_current_acceleration_{
     this, "~/input/acceleration"};
+  autoware_utils_rclcpp::InterProcessPollingSubscriber<SteeringReport> sub_current_steering_{
+    this, "~/input/steering_status"};
   autoware_utils_rclcpp::InterProcessPollingSubscriber<PredictedObjects> sub_objects_{
     this, "~/input/objects"};
+  autoware_utils_rclcpp::InterProcessPollingSubscriber<TrackedObjects> sub_tracked_objects_{
+    this, "~/input/tracked_objects"};
   autoware_utils_rclcpp::InterProcessPollingSubscriber<PointCloud2> sub_pointcloud_{
     this, "~/input/pointcloud", autoware_utils_rclcpp::single_depth_sensor_qos()};
   autoware_utils_rclcpp::InterProcessPollingSubscriber<
@@ -111,6 +119,7 @@ private:
   std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_;
 
   std::shared_ptr<lanelet::LaneletMap> lanelet_map_ptr_;
+  autoware_map_msgs::msg::LaneletMapBin::ConstSharedPtr lanelet_map_bin_ptr_;
 };
 
 }  // namespace autoware::trajectory_processor
