@@ -137,8 +137,6 @@ InputDataResult create_input_data_map(
   input_data_map["ego_shape"] = create_ego_shape(
     vehicle_spec.base_link_to_front, vehicle_spec.vehicle_length, vehicle_spec.vehicle_width);
 
-  // Retained in generated datasets for future model versions. The current
-  // sampler ONNX does not consume this tensor.
   input_data_map["turn_indicators"] = create_turn_indicators(
     frame_inputs.turn_indicators_history, frame_inputs.frame_time, INPUT_T_WITH_CURRENT,
     constants::PREDICTION_TIME_STEP_S);

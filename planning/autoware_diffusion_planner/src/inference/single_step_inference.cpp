@@ -66,10 +66,16 @@ SingleStepInference::SingleStepInference(
   road_borders_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(ROAD_BORDERS_SHAPE));
   goal_pose_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(GOAL_POSE_SHAPE));
   ego_shape_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(EGO_SHAPE_SHAPE));
+  turn_indicators_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(TURN_INDICATORS_SHAPE));
   output_num_elements_ = allocate(OUTPUT_SHAPE);
   output_d_ = autoware::cuda_utils::make_unique<float[]>(output_num_elements_);
   output_pinned_ =
     autoware::cuda_utils::make_unique_host<float[]>(output_num_elements_, cudaHostAllocDefault);
+  turn_indicator_logits_num_elements_ = allocate(TURN_INDICATOR_LOGIT_SHAPE);
+  turn_indicator_logits_d_ =
+    autoware::cuda_utils::make_unique<float[]>(turn_indicator_logits_num_elements_);
+  turn_indicator_logits_pinned_ = autoware::cuda_utils::make_unique_host<float[]>(
+    turn_indicator_logits_num_elements_, cudaHostAllocDefault);
 
   load_engine(model_path);
   CHECK_CUDA_ERROR(cudaStreamCreate(&stream_));
@@ -112,7 +118,10 @@ void SingleStepInference::load_engine(const std::string & model_path)
   add_input("road_borders", ROAD_BORDERS_SHAPE);
   add_input("goal_pose", GOAL_POSE_SHAPE);
   add_input("ego_shape", EGO_SHAPE_SHAPE);
+  add_input("turn_indicators", TURN_INDICATORS_SHAPE);
   network_io.emplace_back("trajectory", to_dynamic_dims(OUTPUT_SHAPE, batch_size_));
+  network_io.emplace_back(
+    "turn_indicator_logits", to_dynamic_dims(TURN_INDICATOR_LOGIT_SHAPE, batch_size_));
   network_trt_ptr_ =
     setup_engine(model_path, plugins_path_, batch_size_, precision_, network_io, profile_dims);
   bind_buffers();
@@ -151,7 +160,9 @@ void SingleStepInference::bind_buffers()
   bind_input("road_borders", ROAD_BORDERS_SHAPE, road_borders_d_.get());
   bind_input("goal_pose", GOAL_POSE_SHAPE, goal_pose_d_.get());
   bind_input("ego_shape", EGO_SHAPE_SHAPE, ego_shape_d_.get());
+  bind_input("turn_indicators", TURN_INDICATORS_SHAPE, turn_indicators_d_.get());
   network_trt_ptr_->setTensorAddress("trajectory", output_d_.get());
+  network_trt_ptr_->setTensorAddress("turn_indicator_logits", turn_indicator_logits_d_.get());
 }
 
 void SingleStepInference::transfer_inputs_to_device(const preprocess::InputDataMap & input_data_map)
@@ -179,6 +190,7 @@ void SingleStepInference::transfer_inputs_to_device(const preprocess::InputDataM
   transfer("road_borders", road_borders_d_);
   transfer("goal_pose", goal_pose_d_);
   transfer("ego_shape", ego_shape_d_);
+  transfer("turn_indicators", turn_indicators_d_);
 }
 
 InferenceResult SingleStepInference::infer(const preprocess::InputDataMap & input_data_map)
@@ -192,10 +204,16 @@ InferenceResult SingleStepInference::infer(const preprocess::InputDataMap & inpu
   CHECK_CUDA_ERROR(cudaMemcpyAsync(
     output_pinned_.get(), output_d_.get(), output_num_elements_ * sizeof(float),
     cudaMemcpyDeviceToHost, stream_));
+  CHECK_CUDA_ERROR(cudaMemcpyAsync(
+    turn_indicator_logits_pinned_.get(), turn_indicator_logits_d_.get(),
+    turn_indicator_logits_num_elements_ * sizeof(float), cudaMemcpyDeviceToHost, stream_));
   CHECK_CUDA_ERROR(cudaStreamSynchronize(stream_));
 
   InferenceOutput output;
   output.trajectory.assign(output_pinned_.get(), output_pinned_.get() + output_num_elements_);
+  output.turn_indicator_logits.assign(
+    turn_indicator_logits_pinned_.get(),
+    turn_indicator_logits_pinned_.get() + turn_indicator_logits_num_elements_);
   output.inference_time_ms =
     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   output.is_denormalized = false;

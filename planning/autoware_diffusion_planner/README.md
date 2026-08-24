@@ -151,6 +151,9 @@ colcon test-result --all
 ## ONNX Model and Versioning
 
 The Diffusion Planner relies on an ONNX model for inference.
+
+The sampler model consumes the `turn_indicators` history tensor and returns both `trajectory`
+and `turn_indicator_logits`. The three logit classes are DISABLE, ENABLE_LEFT, and ENABLE_RIGHT.
 To ensure compatibility between models and the ROS 2 node implementation, the model versioning scheme follows **major** and **minor** numbers:
 The model version is defined either by the directory name provided to the node or within the `diffusion_planner.param.json` configuration file.
 

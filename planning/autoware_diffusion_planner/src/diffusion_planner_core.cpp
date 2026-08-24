@@ -270,6 +270,14 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
   const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(kinematic_state.pose.pose);
 
   const auto & raw_predictions = inference_output.trajectory;
+  const auto & turn_indicator_logits = inference_output.turn_indicator_logits;
+  const auto expected_logits_size =
+    static_cast<size_t>(params_.batch_size * TURN_INDICATOR_OUTPUT_DIM);
+  if (turn_indicator_logits.size() != expected_logits_size) {
+    throw std::runtime_error(
+      "turn_indicator_logits size mismatch: expected " + std::to_string(expected_logits_size) +
+      ", got " + std::to_string(turn_indicator_logits.size()));
+  }
   const std::vector<float> denormalized_predictions =
     inference_output.is_denormalized ? raw_predictions
                                      : postprocess::denormalize_prediction(raw_predictions);
@@ -278,10 +286,6 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
     postprocess::parse_predictions(denormalized_predictions, ego_to_map_transform);
 
   PlannerOutput output;
-  const int64_t prev_report = turn_indicators_history_.empty()
-                                ? TurnIndicatorsReport::DISABLE
-                                : turn_indicators_history_.back().report;
-
   // Trajectory and CandidateTrajectories
   for (int i = 0; i < params_.batch_size; i++) {
     auto trajectory = postprocess::create_ego_trajectory(agent_poses, timestamp, i);
@@ -333,9 +337,25 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
     }
 
     // TurnIndicatorsCommand
+    const auto logits_begin =
+      turn_indicator_logits.begin() + static_cast<std::ptrdiff_t>(i * TURN_INDICATOR_OUTPUT_DIM);
+    const std::vector<float> batch_logits(logits_begin, logits_begin + TURN_INDICATOR_OUTPUT_DIM);
+    if (!std::all_of(batch_logits.begin(), batch_logits.end(), [](const float value) {
+          return std::isfinite(value);
+        })) {
+      throw std::runtime_error("turn_indicator_logits contains a non-finite value");
+    }
+    const auto selected_class = static_cast<uint8_t>(std::distance(
+      batch_logits.begin(), std::max_element(batch_logits.begin(), batch_logits.end())));
     TurnIndicatorsCommand turn_indicators_command;
     turn_indicators_command.stamp = timestamp;
-    turn_indicators_command.command = static_cast<uint8_t>(prev_report);
+    if (selected_class == TURN_INDICATOR_OUTPUT_DISABLE) {
+      turn_indicators_command.command = TurnIndicatorsCommand::DISABLE;
+    } else if (selected_class == TURN_INDICATOR_OUTPUT_ENABLE_LEFT) {
+      turn_indicators_command.command = TurnIndicatorsCommand::ENABLE_LEFT;
+    } else {
+      turn_indicators_command.command = TurnIndicatorsCommand::ENABLE_RIGHT;
+    }
 
     if (i == 0) {
       // Publish the first trajectory's command on the standalone turn indicator topic.

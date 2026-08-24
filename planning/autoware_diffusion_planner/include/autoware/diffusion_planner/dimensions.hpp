@@ -72,6 +72,12 @@ inline constexpr int64_t OUTPUT_T = 80;  // Output timestamp number
 inline constexpr int64_t POSE_DIM = 4;   // x, y, cos(yaw), sin(yaw)
 inline constexpr std::array<int64_t, 4> OUTPUT_SHAPE = {1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
 
+inline constexpr int64_t TURN_INDICATOR_OUTPUT_DISABLE = 0;
+inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_LEFT = 1;
+inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_RIGHT = 2;
+inline constexpr int64_t TURN_INDICATOR_OUTPUT_DIM = 3;
+inline constexpr std::array<int64_t, 2> TURN_INDICATOR_LOGIT_SHAPE = {1, TURN_INDICATOR_OUTPUT_DIM};
+
 inline constexpr std::array<int64_t, 4> INITIAL_NOISE_SHAPE = {
   1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
 inline constexpr std::array<int64_t, 3> EGO_HISTORY_SHAPE = {1, INPUT_T + 1, EGO_HISTORY_DIM};

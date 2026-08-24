@@ -98,6 +98,7 @@ std::vector<int64_t> input_shape(const std::string & name, const size_t size)
   if (name == "road_borders") return batched_shape(ROAD_BORDERS_SHAPE, size);
   if (name == "goal_pose") return batched_shape(GOAL_POSE_SHAPE, size);
   if (name == "ego_shape") return batched_shape(EGO_SHAPE_SHAPE, size);
+  if (name == "turn_indicators") return batched_shape(TURN_INDICATORS_SHAPE, size);
   throw std::runtime_error("Unsupported ONNX input: " + name);
 }
 
@@ -124,7 +125,8 @@ std::unordered_map<std::string, std::vector<float>> make_inputs(
     "stop_lines",
     "road_borders",
     "goal_pose",
-    "ego_shape"};
+    "ego_shape",
+    "turn_indicators"};
   std::unordered_map<std::string, std::vector<float>> inputs;
   for (const auto & name : names) {
     const auto & tensor = input_data_map.at(name);
@@ -202,9 +204,10 @@ InferenceResult OnnxruntimeSingleStepInference::infer(
 {
   const auto start = std::chrono::steady_clock::now();
   try {
-    auto outputs = model_.run(make_inputs(input_data_map), {"trajectory"});
+    auto outputs = model_.run(make_inputs(input_data_map), {"trajectory", "turn_indicator_logits"});
     InferenceOutput output;
     output.trajectory = std::move(outputs.at("trajectory"));
+    output.turn_indicator_logits = std::move(outputs.at("turn_indicator_logits"));
     output.inference_time_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     output.is_denormalized = false;

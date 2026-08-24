@@ -69,9 +69,13 @@ private:
   autoware::cuda_utils::CudaUniquePtr<float[]> road_borders_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> goal_pose_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> ego_shape_d_;
+  autoware::cuda_utils::CudaUniquePtr<float[]> turn_indicators_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> output_d_;
   autoware::cuda_utils::CudaUniquePtrHost<float[]> output_pinned_;
   size_t output_num_elements_{0};
+  autoware::cuda_utils::CudaUniquePtr<float[]> turn_indicator_logits_d_;
+  autoware::cuda_utils::CudaUniquePtrHost<float[]> turn_indicator_logits_pinned_;
+  size_t turn_indicator_logits_num_elements_{0};
   cudaStream_t stream_{nullptr};
 
   void bind_buffers();
