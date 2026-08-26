@@ -133,7 +133,7 @@ PredictedObjects::ConstSharedPtr make_blocking_car(double x, double y)
   return std::make_shared<const PredictedObjects>(predicted_objects);
 }
 
-// Build a dense pointcloud cluster the obstacle_stop pipeline will detect.
+// Build a dense blocking pointcloud the obstacle_stop pipeline will detect.
 sensor_msgs::msg::PointCloud2::ConstSharedPtr make_blocking_pointcloud_cluster(
   double center_x, double center_y, double height)
 {
@@ -234,7 +234,8 @@ protected:
     p.enable_stop_for_objects = true;
     p.enable_stop_for_pointcloud = true;
     p.stop_margin = 6.0;
-    p.lateral_margin = 0.5;
+    p.objects.lateral_margin.car = 0.5;
+    p.objects.lateral_margin.unknown = 0.5;
 
     p.obstacle_tracking.on_time_buffer = 0.01;
     p.obstacle_tracking.off_time_buffer = 1.0;
@@ -245,17 +246,7 @@ protected:
 
     p.objects.target_objects.bbox = {"car"};
     p.objects.target_objects.polygon = {"car"};
-
-    p.pointcloud.height_buffer = 0.5;
-    p.pointcloud.min_height = 0.2;
-    p.pointcloud.voxel_grid_filter.x = 0.2;
-    p.pointcloud.voxel_grid_filter.y = 0.2;
-    p.pointcloud.voxel_grid_filter.z = 0.2;
-    p.pointcloud.voxel_grid_filter.min_size = 3;
-    p.pointcloud.clustering.tolerance = 0.3;
-    p.pointcloud.clustering.min_height = 0.5;
-    p.pointcloud.clustering.min_size = 10;
-    p.pointcloud.clustering.max_size = 10000;
+    p.objects.target_objects.pointcloud = {"unknown"};
 
     p.rss_params.enable = true;
     p.rss_params.object_decel.car = 1.5;

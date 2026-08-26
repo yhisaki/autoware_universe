@@ -19,16 +19,16 @@
 #include <autoware/motion_utils/trajectory/trajectory.hpp>
 #include <autoware/object_recognition_utils/predicted_path_utils.hpp>
 #include <autoware_utils/geometry/boost_polygon_utils.hpp>
+#include <autoware_utils/geometry/sat_2d.hpp>
 #include <autoware_utils/transform/transforms.hpp>
 #include <autoware_utils_geometry/geometry.hpp>
-#include <range/v3/view.hpp>
 
 #include <boost/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -138,12 +138,20 @@ TrajectoryPoints extend_trajectory(const TrajectoryPoints & trajectory_points, c
   return extended_trajectory;
 }
 
-TrajectoryShape get_trajectory_shape(
+TrajectoryShape build_trajectory_footprint_index(
   const TrajectoryPoints & trajectory_points, const geometry_msgs::msg::Pose & ego_pose,
   const autoware::vehicle_info_utils::VehicleInfo & vehicle_info, const double ego_vel,
-  const double ego_accel, const double decel, const double jerk, const double stop_margin,
-  const double lateral_margin, const double longitudinal_margin)
+  const double ego_accel, const double decel, const double jerk, const double stop_margin)
 {
+  TrajectoryShape shape;
+  shape.trajectory_length = 0.0;
+  shape.forward_traj_length = 0.0;
+  shape.ego_half_width = vehicle_info.vehicle_width_m / 2.0;
+  shape.ego_front_offset = vehicle_info.max_longitudinal_offset_m;
+  shape.ego_back_offset = -vehicle_info.min_longitudinal_offset_m;
+
+  if (trajectory_points.empty()) return shape;
+
   const auto offset_pose =
     autoware_utils::calc_offset_pose(ego_pose, vehicle_info.max_longitudinal_offset_m, 0, 0);
   auto start_idx = motion_utils::findNearestSegmentIndex(trajectory_points, offset_pose.position);
@@ -152,6 +160,8 @@ TrajectoryShape get_trajectory_shape(
   const auto ego_arc_length =
     motion_utils::calcSignedArcLength(trajectory_points, 0, ego_pose.position);
   const auto forward_traj_length = traj_length - ego_arc_length;
+  shape.trajectory_length = traj_length;
+  shape.forward_traj_length = forward_traj_length;
 
   const auto detection_length =
     get_detection_length(forward_traj_length, ego_vel, ego_accel, decel, jerk, stop_margin);
@@ -164,101 +174,203 @@ TrajectoryShape get_trajectory_shape(
     return extend_trajectory(trajectory_points, stop_margin);
   });
 
-  autoware_utils_geometry::LineString2d ls_front_right;
-  autoware_utils_geometry::LineString2d ls_front_left;
-  autoware_utils_geometry::LineString2d ls_rear_right;
-  autoware_utils_geometry::LineString2d ls_rear_left;
-  ls_front_right.reserve(detection_traj.size());
-  ls_front_left.reserve(detection_traj.size());
-  ls_rear_right.reserve(detection_traj.size());
-  ls_rear_left.reserve(detection_traj.size());
+  if (detection_traj.empty()) return shape;
 
-  autoware_utils_geometry::Polygon2d polygon_front;
-  autoware_utils_geometry::Polygon2d polygon_rear;
+  constexpr double min_ds = 0.1;
+  constexpr double max_ds = 1.0;
 
-  constexpr double min_resolution = 0.1;
+  auto add_sample =
+    [&](const geometry_msgs::msg::Pose & pose, const size_t traj_index, const double arc_length) {
+      shape.footprints.push_back(EgoFootprint{pose, traj_index, arc_length});
+    };
 
-  const auto base_footprint = vehicle_info.createFootprint(lateral_margin, longitudinal_margin);
-  for (const auto & [idx, p] : detection_traj | ranges::views::enumerate) {
-    if (idx > 0) {
-      const auto & prev_p = detection_traj[idx - 1];
-      const auto dist = autoware_utils::calc_distance2d(prev_p, p);
-      if (dist < min_resolution) continue;
+  const auto to_original_index = [&](const size_t detection_idx) {
+    return std::min(detection_idx, trajectory_points.size() - 1);
+  };
+
+  auto prev_pose = detection_traj.front().pose;
+  double prev_s = 0.0;
+  size_t prev_idx = 0;
+  add_sample(prev_pose, prev_idx, prev_s);
+
+  for (size_t i = 1; i < detection_traj.size(); ++i) {
+    const auto & curr_pose = detection_traj[i].pose;
+    const auto dist = autoware_utils::calc_distance2d(prev_pose, curr_pose);
+    const bool is_last = (i + 1 == detection_traj.size());
+    if (!is_last && dist < min_ds) continue;
+
+    const auto traj_index = to_original_index(i);
+    if (dist > max_ds) {
+      const auto n_steps = static_cast<size_t>(std::ceil(dist / max_ds));
+      for (size_t k = 1; k < n_steps; ++k) {
+        const auto ratio = static_cast<double>(k) / static_cast<double>(n_steps);
+        const auto interp_pose =
+          autoware_utils_geometry::calc_interpolated_pose(prev_pose, curr_pose, ratio, false);
+        add_sample(interp_pose, prev_idx, prev_s + ratio * dist);
+      }
     }
-    const autoware_utils_geometry::Point2d base_link(p.pose.position.x, p.pose.position.y);
-    const auto angle = tf2::getYaw(p.pose.orientation);
-    const Eigen::Rotation2Dd rotation(angle);
-    const auto front_left_offset =
-      rotation * base_footprint[vehicle_info_utils::VehicleInfo::FrontLeftIndex];
-    const auto front_right_offset =
-      rotation * base_footprint[vehicle_info_utils::VehicleInfo::FrontRightIndex];
-    const auto rear_right_offset =
-      rotation * base_footprint[vehicle_info_utils::VehicleInfo::RearRightIndex];
-    const auto rear_left_offset =
-      rotation * base_footprint[vehicle_info_utils::VehicleInfo::RearLeftIndex];
-    ls_front_left.emplace_back(
-      base_link.x() + front_left_offset.x(), base_link.y() + front_left_offset.y());
-    ls_front_right.emplace_back(
-      base_link.x() + front_right_offset.x(), base_link.y() + front_right_offset.y());
-    ls_rear_right.emplace_back(
-      base_link.x() + rear_right_offset.x(), base_link.y() + rear_right_offset.y());
-    ls_rear_left.emplace_back(
-      base_link.x() + rear_left_offset.x(), base_link.y() + rear_left_offset.y());
+
+    const auto curr_s = prev_s + dist;
+    add_sample(curr_pose, traj_index, curr_s);
+    prev_pose = curr_pose;
+    prev_s = curr_s;
+    prev_idx = traj_index;
   }
-  ls_rear_left.emplace_back(ls_front_left.back());
-  ls_rear_right.emplace_back(ls_front_right.back());
-  ls_front_left.insert(ls_front_left.begin(), ls_rear_left.front());
-  ls_front_right.insert(ls_front_right.begin(), ls_rear_right.front());
 
-  boost::geometry::reverse(ls_front_right);
-  boost::geometry::reverse(ls_rear_right);
+  std::vector<FootprintNode> nodes;
+  nodes.reserve(shape.footprints.size());
+  for (size_t i = 0; i < shape.footprints.size(); ++i) {
+    const auto poly = autoware_utils::to_footprint(
+      shape.footprints[i].pose, shape.ego_front_offset, shape.ego_back_offset,
+      2.0 * shape.ego_half_width);
+    const auto box = boost::geometry::return_envelope<autoware_utils_geometry::Box2d>(poly);
+    nodes.emplace_back(box, i);
+    if (i == 0) {
+      shape.bounding_box = box;
+    } else {
+      boost::geometry::expand(shape.bounding_box, box);
+    }
+  }
+  shape.rtree = FootprintRtree(nodes.begin(), nodes.end());
+  return shape;
+}
 
-  boost::geometry::append(polygon_front, ls_front_left);
-  boost::geometry::append(polygon_front, ls_front_right);
-  boost::geometry::append(polygon_rear, ls_rear_left);
-  boost::geometry::append(polygon_rear, ls_rear_right);
+namespace
+{
+autoware_utils_geometry::Box2d inflate_box(
+  const autoware_utils_geometry::Box2d & box, const double margin)
+{
+  return {
+    {box.min_corner().x() - margin, box.min_corner().y() - margin},
+    {box.max_corner().x() + margin, box.max_corner().y() + margin}};
+}
 
-  boost::geometry::correct(polygon_front);
-  boost::geometry::correct(polygon_rear);
+std::vector<FootprintNode> query_rtree_candidates(
+  const TrajectoryShape & shape, const autoware_utils_geometry::Box2d & query_box)
+{
+  std::vector<FootprintNode> candidates;
+  if (shape.rtree.empty()) return candidates;
+  shape.rtree.query(boost::geometry::index::intersects(query_box), std::back_inserter(candidates));
+  return candidates;
+}
 
-  autoware_utils_geometry::MultiPolygon2d trajectory_polygon;
-  boost::geometry::union_(polygon_front, polygon_rear, trajectory_polygon);
+std::vector<size_t> sort_hits_by_arc_length(
+  const TrajectoryShape & shape, std::vector<size_t> && hits)
+{
+  std::sort(hits.begin(), hits.end(), [&](const size_t a, const size_t b) {
+    return shape.footprints[a].arc_length < shape.footprints[b].arc_length;
+  });
+  return hits;
+}
 
-  autoware_utils_geometry::Box2d envelope;
-  boost::geometry::envelope(trajectory_polygon, envelope);
+bool is_point_within_footprint(
+  const TrajectoryShape & shape, const EgoFootprint & footprint, const Point2d & point,
+  const double lat_margin)
+{
+  const auto rel = autoware_utils::inverse_transform_point(point.to_3d(), footprint.pose);
+  return rel.x() >= -shape.ego_back_offset && rel.x() <= shape.ego_front_offset &&
+         std::abs(rel.y()) <= shape.ego_half_width + lat_margin;
+}
 
-  return TrajectoryShape{trajectory_polygon, envelope, traj_length, forward_traj_length};
+Polygon2d make_local_ego_polygon(const TrajectoryShape & shape, const double lat_margin)
+{
+  const double half_width = shape.ego_half_width + lat_margin;
+  Polygon2d ego;
+  ego.outer() = {
+    {shape.ego_front_offset, half_width},  {shape.ego_front_offset, -half_width},
+    {-shape.ego_back_offset, -half_width}, {-shape.ego_back_offset, half_width},
+    {shape.ego_front_offset, half_width},
+  };
+  return ego;
+}
+
+Polygon2d transform_polygon_to_pose_frame(
+  const Polygon2d & polygon, const geometry_msgs::msg::Pose & pose)
+{
+  Polygon2d local;
+  local.outer().reserve(polygon.outer().size());
+  for (const auto & p : polygon.outer()) {
+    const auto rel = autoware_utils::inverse_transform_point(p.to_3d(), pose);
+    local.outer().emplace_back(rel.x(), rel.y());
+  }
+  return local;
+}
+}  // namespace
+
+std::vector<size_t> query_overlapping_footprints(
+  const TrajectoryShape & shape, const Polygon2d & polygon, const double lat_margin)
+{
+  if (polygon.outer().empty()) return {};
+
+  const auto query_box = inflate_box(
+    boost::geometry::return_envelope<autoware_utils_geometry::Box2d>(polygon), lat_margin);
+  const auto candidates = query_rtree_candidates(shape, query_box);
+  const auto ego_local = make_local_ego_polygon(shape, lat_margin);
+
+  std::vector<size_t> hits;
+  hits.reserve(candidates.size());
+  for (const auto & node : candidates) {
+    const auto object_local =
+      transform_polygon_to_pose_frame(polygon, shape.footprints[node.second].pose);
+    if (autoware_utils_geometry::sat::intersects(ego_local, object_local)) {
+      hits.push_back(node.second);
+    }
+  }
+  return sort_hits_by_arc_length(shape, std::move(hits));
+}
+
+std::vector<size_t> query_overlapping_footprints(
+  const TrajectoryShape & shape, const Point2d & point, const double lat_margin)
+{
+  const autoware_utils_geometry::Box2d query_box{
+    {point.x() - lat_margin, point.y() - lat_margin},
+    {point.x() + lat_margin, point.y() + lat_margin}};
+  const auto candidates = query_rtree_candidates(shape, query_box);
+
+  std::vector<size_t> hits;
+  hits.reserve(candidates.size());
+  for (const auto & node : candidates) {
+    if (is_point_within_footprint(shape, shape.footprints[node.second], point, lat_margin)) {
+      hits.push_back(node.second);
+    }
+  }
+  return sort_hits_by_arc_length(shape, std::move(hits));
 }
 
 std::optional<CollisionPoint> get_nearest_pcd_collision(
-  const TrajectoryPoints & trajectory_points, const TrajectoryShape & trajectory_shape,
-  const PointCloud::Ptr & pointcloud, std::vector<geometry_msgs::msg::Point> & target_pcd_points)
+  const TrajectoryShape & trajectory_shape, const PointCloud::Ptr & pointcloud,
+  const LateralMarginMap & lateral_margin_map,
+  std::vector<geometry_msgs::msg::Point> & target_pcd_points)
 {
-  if (pointcloud->empty() || trajectory_points.size() < 2) return std::nullopt;
-
-  PointCloud::Ptr pointcloud_in_polygon(new PointCloud);
-  for (const auto & point : *pointcloud) {
-    if (boost::geometry::within(
-          autoware_utils::Point2d{point.x, point.y}, trajectory_shape.polygon)) {
-      pointcloud_in_polygon->push_back(point);
-    }
-  }
-
-  if (pointcloud_in_polygon->empty()) return std::nullopt;
+  if (pointcloud->empty() || trajectory_shape.footprints.empty()) return std::nullopt;
 
   auto min_arc_length = std::numeric_limits<double>::max();
   geometry_msgs::msg::Point nearest_collision_point;
-  for (const auto & point : *pointcloud_in_polygon) {
+  bool found_collision = false;
+
+  for (const auto & point : *pointcloud) {
+    const auto classification = static_cast<PointCloudClassification>(point.class_id);
+    const auto lat_margin = get_lateral_margin(lateral_margin_map, to_object_type(classification));
+    const Point2d query_point{point.x, point.y};
+    const auto hits = query_overlapping_footprints(trajectory_shape, query_point, lat_margin);
+    if (hits.empty()) continue;
+
+    const auto & footprint = trajectory_shape.footprints[hits.front()];
+    const auto rel = autoware_utils::inverse_transform_point(query_point.to_3d(), footprint.pose);
+    const auto arc_length = footprint.arc_length + rel.x();
+
     geometry_msgs::msg::Point p =
       geometry_msgs::msg::Point().set__x(point.x).set__y(point.y).set__z(point.z);
-    auto arc_length = motion_utils::calcSignedArcLength(trajectory_points, 0, p);
+    target_pcd_points.emplace_back(p);
+
     if (arc_length < min_arc_length) {
       min_arc_length = arc_length;
       nearest_collision_point = p;
+      found_collision = true;
     }
-    target_pcd_points.emplace_back(p);
   }
 
+  if (!found_collision) return std::nullopt;
   return CollisionPoint(nearest_collision_point, min_arc_length);
 }
 
@@ -470,49 +582,24 @@ void PointCloudFilter::filter_pointcloud(
 {
   if (pointcloud->empty()) return;
 
-  crop_box_.setMin(Eigen::Vector4f(min_x, min_y, min_z, 1.0));
-  crop_box_.setMax(Eigen::Vector4f(max_x, max_y, max_z, 1.0));
-  crop_box_.setInputCloud(pointcloud);
-  crop_box_.filter(*pointcloud);
+  auto is_within_range = [&](const auto & point) {
+    return point.x >= min_x && point.x <= max_x && point.y >= min_y && point.y <= max_y &&
+           point.z >= min_z && point.z <= max_z;
+  };
 
-  if (pointcloud->empty()) return;
+  auto is_target_type = [&](const auto & point) {
+    const auto classification = static_cast<PointCloudClassification>(point.class_id);
+    if (pcd_class_to_object_type.count(classification) == 0) return false;
+    return pcd_types_.count(pcd_class_to_object_type.at(classification)) != 0;
+  };
 
-  voxel_grid_.setInputCloud(pointcloud);
-  voxel_grid_.filter(*pointcloud);
-}
-
-void PointCloudFilter::cluster_pointcloud(
-  const PointCloud::Ptr & input, PointCloud::Ptr & output, const double min_height)
-{
-  if (input->empty()) return;
-
-  std::vector<pcl::PointIndices> cluster_indices;
-  tree_->setInputCloud(input);
-  ec_.setSearchMethod(tree_);
-  ec_.setInputCloud(input);
-  ec_.extract(cluster_indices);
-
-  PointCloud::Ptr cluster_buffer(new PointCloud);
-  PointCloud::Ptr hull_buffer(new PointCloud);
-
-  for (const auto & indices : cluster_indices) {
-    cluster_buffer->clear();
-    hull_buffer->clear();
-    bool cluster_above_height_threshold{false};
-    for (const auto & index : indices.indices) {
-      const auto & point = (*input)[index];
-
-      cluster_above_height_threshold |= point.z >= min_height;
-      cluster_buffer->push_back(point);
-    }
-    if (!cluster_above_height_threshold || cluster_buffer->empty()) continue;
-
-    convex_hull_.setInputCloud(cluster_buffer);
-    convex_hull_.reconstruct(*hull_buffer);
-    for (const auto & point : *hull_buffer) {
-      output->push_back(point);
-    }
-  }
+  // Axis-aligned crop via x/y/z only. pcl::CropBox cannot be used with PointXYZCPE because
+  // PCL transform helpers require a .data member that this point type does not provide.
+  pointcloud->erase(
+    std::remove_if(
+      pointcloud->begin(), pointcloud->end(),
+      [&](const auto & point) { return !is_within_range(point) || !is_target_type(point); }),
+    pointcloud->end());
 }
 
 void PointCloudFilter::filter_pointcloud_by_object(
@@ -551,17 +638,22 @@ void PointCloudFilter::filter_pointcloud_by_object(
 void ObjectFilter::filter_by_target_area(
   PredictedObjects & objects, const TrajectoryPoints & trajectory_points,
   const autoware::vehicle_info_utils::VehicleInfo & vehicle_info,
-  const MultiPolygon2d & target_area, MultiPolygon2d & target_polygons)
+  const TrajectoryShape & trajectory_shape, const LateralMarginMap & lateral_margin_map,
+  MultiPolygon2d & target_polygons)
 {
   const auto ego_front_offset = vehicle_info.max_longitudinal_offset_m;
   constexpr double time_buffer = 0.5;
   auto time_to_obj_current_pos =
-    [&](const auto & object_pose, const size_t nearest_seg_idx) -> double {
+    [&](const auto & object_pose, const size_t nearest_seg_idx) -> std::optional<double> {
     const auto t_to_nearest_seg =
       rclcpp::Duration(trajectory_points.at(nearest_seg_idx).time_from_start).seconds();
     const auto lon_offset_dist =
       motion_utils::calcSignedArcLength(trajectory_points, nearest_seg_idx, object_pose.position);
     const auto nearest_seg_vel = trajectory_points.at(nearest_seg_idx).longitudinal_velocity_mps;
+    if (nearest_seg_vel < 1e-3) {
+      if (lon_offset_dist > ego_front_offset) return std::nullopt;
+      return std::max(0.0, t_to_nearest_seg - time_buffer);
+    }
     const auto ego_front_time_offset = ego_front_offset / nearest_seg_vel;
     const auto t_to_obj =
       t_to_nearest_seg + (lon_offset_dist / nearest_seg_vel) - ego_front_time_offset - time_buffer;
@@ -579,7 +671,11 @@ void ObjectFilter::filter_by_target_area(
     return autoware_utils::expand_polygon(polygon, safety_buffer_);
   };
 
-  auto is_exiting = [&](const auto & object) -> bool {
+  auto overlaps_ego_footprints = [&](const Polygon2d & polygon, const double lat_margin) {
+    return !query_overlapping_footprints(trajectory_shape, polygon, lat_margin).empty();
+  };
+
+  auto is_exiting = [&](const auto & object, const double lat_margin) -> bool {
     const auto & object_pose = object.kinematics.initial_pose_with_covariance.pose;
     const auto obj_rot = Eigen::Rotation2Dd(tf2::getYaw(object_pose.orientation));
     const auto obj_vel = object.kinematics.initial_twist_with_covariance.twist.linear;
@@ -595,19 +691,21 @@ void ObjectFilter::filter_by_target_area(
     const auto obj_lat_vel = std::abs(obj_vel_vector.dot(traj_lat_dir));
     if (obj_lat_vel < max_lateral_velocity_th_ && obj_lat_vel < obj_lon_vel) return false;
     const auto t_to_obj_current_pos = time_to_obj_current_pos(object_pose, nearest_seg);
-    const auto obj_pred_pose = get_predicted_obj_pose_at_time(object, t_to_obj_current_pos);
+    if (!t_to_obj_current_pos) return true;
+    const auto obj_pred_pose = get_predicted_obj_pose_at_time(object, t_to_obj_current_pos.value());
     const auto obj_pred_polygon = get_object_polygon(obj_pred_pose, object.shape);
-    return boost::geometry::disjoint(obj_pred_polygon, target_area);
+    return !overlaps_ego_footprints(obj_pred_polygon, lat_margin);
   };
 
   objects.objects.erase(
     std::remove_if(
       objects.objects.begin(), objects.objects.end(),
       [&](const auto & object) {
+        const auto lat_margin = get_lateral_margin(lateral_margin_map, to_object_type(object));
         const auto object_pose = object.kinematics.initial_pose_with_covariance.pose;
         const auto object_polygon = get_object_polygon(object_pose, object.shape);
-        if (boost::geometry::disjoint(object_polygon, target_area)) return true;
-        if (is_exiting(object)) return true;
+        if (!overlaps_ego_footprints(object_polygon, lat_margin)) return true;
+        if (is_exiting(object, lat_margin)) return true;
         target_polygons.emplace_back(object_polygon);
         return false;
       }),
@@ -627,6 +725,15 @@ void ObstacleTracker::update_objects(
       it++;
   }
 
+  auto estimate_pose = [&](const PersistentObject & object) -> geometry_msgs::msg::Pose {
+    const auto & pose = object.object.kinematics.initial_pose_with_covariance.pose;
+    const auto & twist = object.object.kinematics.initial_twist_with_covariance.twist.linear;
+    const auto dt = (now - object.last_seen_time).seconds();
+    const auto dx = twist.x * dt;
+    const auto dy = twist.y * dt;
+    return autoware_utils::calc_offset_pose(pose, dx, dy, 0.0);
+  };
+
   auto get_closest_object_uuid =
     [&](const PredictedObject & object) -> std::optional<boost::uuids::uuid> {
     std::optional<boost::uuids::uuid> closest_uuid = std::nullopt;
@@ -644,9 +751,9 @@ void ObstacleTracker::update_objects(
       if (existing_obj_label != obj_label) continue;
       const auto distance = autoware_utils::calc_distance2d(
         object.kinematics.initial_pose_with_covariance.pose.position,
-        existing_object.object.kinematics.initial_pose_with_covariance.pose.position);
+        estimate_pose(existing_object).position);
       if (distance > min_distance) continue;
-      // ignore orientation difference for cylinder objects
+      // ignore orientation difference for symmetric objects
       const bool is_symmetric =
         std::abs(object.shape.dimensions.x - object.shape.dimensions.y) < 0.1;
       const auto yaw_diff =
@@ -696,12 +803,12 @@ void ObstacleTracker::update_points(
   }
 
   auto get_closest_point_uuid =
-    [&](const geometry_msgs::msg::Point & point) -> std::optional<boost::uuids::uuid> {
+    [&](const PointXYZCPE & point) -> std::optional<boost::uuids::uuid> {
     std::optional<boost::uuids::uuid> closest_uuid = std::nullopt;
     if (persistent_point_map_.empty()) return std::nullopt;
     double min_distance = pcd_distance_th_ + std::numeric_limits<double>::epsilon();
     for (const auto & [uuid, existing_point] : persistent_point_map_) {
-      const auto distance = autoware_utils::calc_distance2d(point, existing_point.position);
+      const auto distance = autoware_utils::calc_distance2d(point, existing_point.point);
       if (distance > min_distance) continue;
       min_distance = distance;
       closest_uuid = uuid;
@@ -710,22 +817,21 @@ void ObstacleTracker::update_points(
   };
 
   for (const auto & point : points->points) {
-    auto point_msg = autoware_utils::create_point(point.x, point.y, point.z);
-    const auto closest_uuid = get_closest_point_uuid(point_msg);
+    const auto closest_uuid = get_closest_point_uuid(point);
     if (!closest_uuid) {
-      persistent_point_map_.emplace(id_generator_(), PersistentPoint(point_msg, now));
+      persistent_point_map_.emplace(id_generator_(), PersistentPoint(point, now));
       continue;
     }
     auto & closest_point = persistent_point_map_.at(closest_uuid.value());
     closest_point.last_seen_time = now;
-    closest_point.position = point_msg;
+    closest_point.point = point;
     const auto duration = (now - closest_point.first_seen_time).seconds();
     closest_point.is_active = duration >= on_time_buffer_;
   }
 
   for (const auto & [uuid, entry] : persistent_point_map_) {
     if (entry.is_active) {
-      persistent_points->points.emplace_back(entry.position.x, entry.position.y, entry.position.z);
+      persistent_points->points.push_back(entry.point);
     }
   }
 }
