@@ -649,17 +649,67 @@ std::vector<double> get_s_samples_near_object(
 }
 
 /**
+ * @brief Get rear-left and rear-right corners of a box centered on the object pose.
+ * @param object Object supplying the pose the box is centered on and aligned with.
+ * @param length Box extent along the object x axis [m].
+ * @param width Box extent along the object y axis [m].
+ * @return Rear edge corner points in map frame.
+ */
+template <typename ObjectT>
+std::pair<geometry_msgs::msg::Point, geometry_msgs::msg::Point> get_box_rear_edge_points(
+  const ObjectT & object, const double length, const double width)
+{
+  const auto & object_pose = get_object_pose(object);
+  const double rear_longitudinal_offset = -0.5 * length;
+  const double half_width = 0.5 * width;
+
+  const auto rear_left = autoware_utils_geometry::calc_offset_pose(
+                           object_pose, rear_longitudinal_offset, half_width, 0.0)
+                           .position;
+  const auto rear_right = autoware_utils_geometry::calc_offset_pose(
+                            object_pose, rear_longitudinal_offset, -half_width, 0.0)
+                            .position;
+  return {rear_left, rear_right};
+}
+
+/**
+ * @brief Check whether shape.dimensions defines a usable bounding box.
+ * @param object Object.
+ * @return True if both of dimensions x and y are non-zero.
+ * @details The rear edge is a planar quantity, so only the length and width are required. A
+ *          flat box with dimensions.z of zero still yields valid rear corners.
+ */
+template <typename ObjectT>
+bool has_valid_bounding_box_dimensions(const ObjectT & object)
+{
+  constexpr double k_dimension_epsilon_m = 1e-6;
+  const auto & dimensions = object.shape.dimensions;
+  return std::abs(dimensions.x) > k_dimension_epsilon_m &&
+         std::abs(dimensions.y) > k_dimension_epsilon_m;
+}
+
+/**
  * @brief Get rear-left and rear-right corners of the object footprint.
  * @param object Object.
+ * @param footprint Object footprint in map frame; used only when no bounding box is available.
  * @return Rear edge corner points in map frame.
+ * @details Resolved in three steps. A CYLINDER only carries a diameter in dimensions.x, so it is
+ *          bounded by a square of that diameter. Otherwise, a non-zero length and width define a
+ *          bounding box and are preferred whatever the shape type is, so a POLYGON that also
+ *          reports dimensions uses the box. Only when neither applies is the rearmost edge
+ *          scanned out of the footprint polygon.
  */
 template <typename ObjectT>
 std::pair<geometry_msgs::msg::Point, geometry_msgs::msg::Point> get_object_rear_edge_points(
   const ObjectT & object, const autoware_utils_geometry::Polygon2d & footprint)
 {
-  if (object.shape.type != autoware_perception_msgs::msg::Shape::POLYGON) {
-    const auto reference_point = get_object_reference_point(object);
-    return {reference_point, reference_point};
+  if (object.shape.type == autoware_perception_msgs::msg::Shape::CYLINDER) {
+    const double diameter = object.shape.dimensions.x;
+    return get_box_rear_edge_points(object, diameter, diameter);
+  }
+
+  if (has_valid_bounding_box_dimensions(object)) {
+    return get_box_rear_edge_points(object, object.shape.dimensions.x, object.shape.dimensions.y);
   }
 
   const auto & object_pose = get_object_pose(object);

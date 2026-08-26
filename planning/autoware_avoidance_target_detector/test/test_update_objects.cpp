@@ -20,6 +20,7 @@
 #include <autoware_perception_msgs/msg/shape.hpp>
 #include <autoware_planning_msgs/msg/lanelet_primitive.hpp>
 #include <autoware_planning_msgs/msg/lanelet_segment.hpp>
+#include <geometry_msgs/msg/point32.hpp>
 
 #include <gtest/gtest.h>
 #include <lanelet2_core/Attribute.h>
@@ -29,6 +30,7 @@
 #include <lanelet2_core/primitives/Point.h>
 #include <lanelet2_core/utility/Utilities.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -55,6 +57,11 @@ constexpr double k_disconnected_left_y_m = 4.5;
 constexpr double k_disconnected_right_y_m = 2.5;
 constexpr lanelet::Id k_main_lanelet_id_base = 1000000000;
 constexpr lanelet::Id k_disconnected_lanelet_id_base = 2000000000;
+
+/// Lateral offset that puts the whole test object clear of the trajectory corridor.
+/// The deviation filter measures |d| from the rear edge, so the near-side corner of the 1.8 m wide
+/// bounding box (y - 0.9) must exceed OnTrajectoryDValidationParams::magnitude_threshold_m.
+constexpr double k_deviated_object_y_m = 3.0;
 
 rclcpp::Time make_time(const int32_t seconds, const uint32_t nanoseconds = 0)
 {
@@ -84,7 +91,8 @@ geometry_msgs::msg::Twist & mutable_twist(TrackedObject & object)
 template <typename ObjectT>
 ObjectT make_object(
   const uint8_t id, const double x, const double y, const double velocity_mps = 0.0,
-  const uint8_t label = ObjectClassification::CAR, const float probability = 1.0F)
+  const uint8_t label = ObjectClassification::CAR, const float probability = 1.0F,
+  const double yaw = 0.0)
 {
   ObjectT object;
   object.object_id.uuid.fill(0U);
@@ -98,13 +106,53 @@ ObjectT make_object(
   auto & pose = mutable_pose(object);
   pose.position.x = x;
   pose.position.y = y;
-  pose.orientation.w = 1.0;
+  pose.orientation.z = std::sin(yaw / 2.0);
+  pose.orientation.w = std::cos(yaw / 2.0);
   mutable_twist(object).linear.x = velocity_mps;
 
   object.shape.type = Shape::BOUNDING_BOX;
   object.shape.dimensions.x = 4.0;
   object.shape.dimensions.y = 1.8;
   object.shape.dimensions.z = 1.5;
+  return object;
+}
+
+/// Cylinder carrying only a diameter in dimensions.x, as perception publishes them.
+template <typename ObjectT>
+ObjectT make_cylinder_object(
+  const uint8_t id, const double x, const double y, const double diameter)
+{
+  auto object = make_object<ObjectT>(id, x, y);
+  object.shape.type = Shape::CYLINDER;
+  object.shape.dimensions.x = diameter;
+  object.shape.dimensions.y = 0.0;
+  object.shape.dimensions.z = 1.5;
+  return object;
+}
+
+/// Polygon whose footprint is a square of half_extent, deliberately much smaller than the
+/// 4.0 x 1.8 bounding box make_object() reports, so the two rear-edge sources are distinguishable.
+template <typename ObjectT>
+ObjectT make_polygon_object(
+  const uint8_t id, const double x, const double y, const double half_extent)
+{
+  auto object = make_object<ObjectT>(id, x, y);
+  object.shape.type = Shape::POLYGON;
+
+  const std::vector<std::pair<double, double>> corners{
+    {half_extent, half_extent},
+    {-half_extent, half_extent},
+    {-half_extent, -half_extent},
+    {half_extent, -half_extent}};
+  object.shape.footprint.points.clear();
+  object.shape.footprint.points.reserve(corners.size());
+  for (const auto & [corner_x, corner_y] : corners) {
+    geometry_msgs::msg::Point32 point;
+    point.x = static_cast<float>(corner_x);
+    point.y = static_cast<float>(corner_y);
+    point.z = 0.0F;
+    object.shape.footprint.points.push_back(point);
+  }
   return object;
 }
 
@@ -282,7 +330,8 @@ TYPED_TEST(UpdateObjectsTest, EmptyInputProducesEmptyOutputs)
 TYPED_TEST(UpdateObjectsTest, StationaryDeviatedObjectIsImmediatelyAvoidanceTarget)
 {
   typename TestFixture::Selector selector;
-  const auto objects = make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, 2.0)});
+  const auto objects =
+    make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, k_deviated_object_y_m)});
 
   selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
   const auto avoidance_targets =
@@ -328,9 +377,11 @@ TYPED_TEST(UpdateObjectsTest, ClassificationProbabilityThresholdIsStrict)
 {
   typename TestFixture::Selector selector;
   const auto objects = make_objects<TypeParam>(
-    {make_object<TypeParam>(1, 15.0, 2.0, 0.0, ObjectClassification::CAR, 0.1F),
-     make_object<TypeParam>(2, 15.0, 2.0, 0.0, ObjectClassification::CAR, 0.1001F),
-     make_object<TypeParam>(3, 15.0, 2.0, 0.0, ObjectClassification::PEDESTRIAN, 1.0F)});
+    {make_object<TypeParam>(1, 15.0, k_deviated_object_y_m, 0.0, ObjectClassification::CAR, 0.1F),
+     make_object<TypeParam>(
+       2, 15.0, k_deviated_object_y_m, 0.0, ObjectClassification::CAR, 0.1001F),
+     make_object<TypeParam>(
+       3, 15.0, k_deviated_object_y_m, 0.0, ObjectClassification::PEDESTRIAN, 1.0F)});
 
   selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
   const auto avoidance_targets =
@@ -343,8 +394,9 @@ TYPED_TEST(UpdateObjectsTest, MixedObjectsPreserveHeaderAndSurvivingOrder)
 {
   typename TestFixture::Selector selector;
   const auto objects = make_objects<TypeParam>(
-    {make_object<TypeParam>(4, 12.0, 2.0), make_object<TypeParam>(2, 15.0, 0.0),
-     make_object<TypeParam>(7, 18.0, 2.0), make_object<TypeParam>(9, 15.0, 2.6, 2.0)});
+    {make_object<TypeParam>(4, 12.0, k_deviated_object_y_m), make_object<TypeParam>(2, 15.0, 0.0),
+     make_object<TypeParam>(7, 18.0, k_deviated_object_y_m),
+     make_object<TypeParam>(9, 15.0, 2.6, 2.0)});
 
   selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
   const auto avoidance_targets =
@@ -393,7 +445,8 @@ TYPED_TEST(UpdateObjectsTest, SinglePointTrajectorySupportsIdenticalPolygonEndpo
 TYPED_TEST(UpdateObjectsTest, StaleThresholdComparisonIsStrict)
 {
   typename TestFixture::Selector selector;
-  const auto objects = make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, 2.0)});
+  const auto objects =
+    make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, k_deviated_object_y_m)});
   const typename TestFixture::Objects empty_objects;
 
   selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
@@ -416,7 +469,8 @@ TYPED_TEST(UpdateObjectsTest, StaleThresholdComparisonIsStrict)
 TYPED_TEST(UpdateObjectsTest, AvoidanceHysteresisCountAccumulatesDuringTimeLockout)
 {
   typename TestFixture::Selector selector;
-  const auto deviated_objects = make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, 2.0)});
+  const auto deviated_objects =
+    make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, k_deviated_object_y_m)});
   const auto aligned_objects = make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, 0.0)});
 
   selector.update_objects(make_time(0), deviated_objects, this->trajectory_, route_handler());
@@ -553,7 +607,63 @@ TYPED_TEST(UpdateObjectsTest, RangeFilterRejectsInvalidAdditionalPredictionHoriz
 TYPED_TEST(UpdateObjectsTest, LongitudinalFilterPrunesStateQualifiedTarget)
 {
   typename TestFixture::Selector selector;
-  const auto objects = make_objects<TypeParam>({make_object<TypeParam>(1, -10.0, 2.0)});
+  const auto objects =
+    make_objects<TypeParam>({make_object<TypeParam>(1, -10.0, k_deviated_object_y_m)});
+
+  selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
+
+  EXPECT_TRUE(selector.get_avoidance_targets(objects, this->trajectory_, this->empty_route_bounds_)
+                .objects.empty());
+}
+
+TYPED_TEST(UpdateObjectsTest, BoundingBoxRearEdgeUsesCornersInsteadOfCenter)
+{
+  // The center sits 2.0 m from the trajectory, beyond magnitude_threshold_m (1.5 m), but the rear
+  // edge of the 1.8 m wide bounding box reaches to 1.1 m, so the object counts as on-trajectory.
+  typename TestFixture::Selector selector;
+  const auto objects = make_objects<TypeParam>({make_object<TypeParam>(1, 15.0, 2.0)});
+
+  selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
+
+  EXPECT_TRUE(selector.get_avoidance_targets(objects, this->trajectory_, this->empty_route_bounds_)
+                .objects.empty());
+}
+
+TYPED_TEST(UpdateObjectsTest, CylinderRearEdgeUsesDiameterSquare)
+{
+  // The 4.0 m diameter cylinder is bounded by a 4.0 x 4.0 square, so its rear edge spans
+  // y = 0.5 to 4.5 and reaches within magnitude_threshold_m of the trajectory. Neither the object
+  // center (2.5 m out) nor a zero-width box would come close enough.
+  typename TestFixture::Selector selector;
+  const auto objects =
+    make_objects<TypeParam>({make_cylinder_object<TypeParam>(1, 15.0, 2.5, 4.0)});
+
+  selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
+
+  EXPECT_TRUE(selector.get_avoidance_targets(objects, this->trajectory_, this->empty_route_bounds_)
+                .objects.empty());
+}
+
+TYPED_TEST(UpdateObjectsTest, PolygonWithValidDimensionsPrefersBoundingBox)
+{
+  // The 0.2 m footprint alone would put the rear edge 1.8 m out and keep the object a target, but
+  // the populated dimensions define a 1.8 m wide box whose rear edge reaches 1.1 m, so it is not.
+  typename TestFixture::Selector selector;
+  const auto objects = make_objects<TypeParam>({make_polygon_object<TypeParam>(1, 15.0, 2.0, 0.2)});
+
+  selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
+
+  EXPECT_TRUE(selector.get_avoidance_targets(objects, this->trajectory_, this->empty_route_bounds_)
+                .objects.empty());
+}
+
+TYPED_TEST(UpdateObjectsTest, BoundingBoxRearEdgeFollowsObjectOrientation)
+{
+  // Yawed 90 degrees, the 4.0 m long box points across the trajectory: its rear edge swings from
+  // y = 2.0 down onto the centerline, which the center-only fallback would never detect.
+  typename TestFixture::Selector selector;
+  const auto objects = make_objects<TypeParam>(
+    {make_object<TypeParam>(1, 15.0, 2.0, 0.0, ObjectClassification::CAR, 1.0F, M_PI_2)});
 
   selector.update_objects(make_time(0), objects, this->trajectory_, route_handler());
 

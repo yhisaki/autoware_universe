@@ -121,10 +121,6 @@ public:
   /** Build the extended route map and routing graph from the original map and route. */
   void create_map();
 
-  /** Write the route map to the debug OSM file. Temporary debug code. Must be removed before
-   * release. */
-  void export_debug_map() const;
-
   [[nodiscard]] const std::shared_ptr<RouteHandler> & getOriginalRouteHandler() const
   {
     return original_route_handler_;
