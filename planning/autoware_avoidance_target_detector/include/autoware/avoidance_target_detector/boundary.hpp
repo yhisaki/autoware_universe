@@ -114,6 +114,8 @@ private:
 class ExtendedRouteHandler
 {
 public:
+  using VelocityLimitOverrides = std::unordered_map<lanelet::Id, double>;
+
   ExtendedRouteHandler(const LaneletMapBin & map, const LaneletRoute & route);
 
   /** Build the extended route map and routing graph from the original map and route. */
@@ -171,9 +173,15 @@ public:
     const geometry_msgs::msg::Point & following_end_point) const;
 
   [[nodiscard]] std::optional<double> get_velocity_limit(const lanelet::BasicPoint2d & point) const;
+  [[nodiscard]] std::optional<double> get_velocity_limit(
+    const lanelet::BasicPoint2d & point, const VelocityLimitOverrides & overrides) const;
   [[nodiscard]] std::optional<double> get_velocity_limit(const lanelet::Point2d & point) const;
   [[nodiscard]] std::optional<double> get_velocity_limit(
+    const lanelet::Point2d & point, const VelocityLimitOverrides & overrides) const;
+  [[nodiscard]] std::optional<double> get_velocity_limit(
     const geometry_msgs::msg::Point & point) const;
+  [[nodiscard]] std::optional<double> get_velocity_limit(
+    const geometry_msgs::msg::Point & point, const VelocityLimitOverrides & overrides) const;
 
 private:
   [[nodiscard]] std::optional<std::size_t> find_segment_index_for_point(

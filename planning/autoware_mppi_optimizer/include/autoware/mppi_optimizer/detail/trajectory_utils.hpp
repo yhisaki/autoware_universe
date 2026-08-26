@@ -47,6 +47,7 @@ struct ReferenceSample
   float y{0.0F};
   float yaw{0.0F};
   float velocity{0.0F};
+  std::optional<float> max_velocity;
   /** Cumulative polyline chord length [m] along the DP trajectory at this sample's source index. */
   float arc_length_s{0.0F};
 };
@@ -62,13 +63,15 @@ struct OptimizedState
 };
 
 /**
- * Deterministic longitudinal profile used only while an external maximum velocity is restrictive.
- * Steering commands are copied from the supplied MPPI control sequence unchanged.
+ * Deterministic longitudinal profile used while an external or pointwise maximum velocity is
+ * restrictive. Steering commands are copied from the supplied MPPI control sequence unchanged.
  */
 struct ActiveVelocityLimitProfile
 {
   bool active{false};
   float target_velocity{0.0F};
+  /** Effective maximum at each post-step sample; nullopt denotes no pointwise maximum. */
+  std::vector<std::optional<float>> maximum_velocities;
   std::vector<FirstOrderDubinsMppiControl> controls;
   /** Post-step velocity and acceleration states aligned with controls. */
   std::vector<float> velocities;
@@ -89,20 +92,28 @@ void setInitialEngageVelocity(
 [[nodiscard]] std::vector<ReferenceSample> buildReferenceHorizon(
   const Trajectory & trajectory, const InitialState & ego, const int horizon = kMppiHorizon,
   const float dt = kMppiDt, const size_t start_idx = 0U,
-  const std::vector<float> * cumulative_chord_length_s = nullptr);
+  const std::vector<float> * cumulative_chord_length_s = nullptr,
+  const std::vector<std::optional<float>> * maximum_velocities = nullptr);
+
+/** Resolve the external/map minimum at every reference point. */
+[[nodiscard]] std::vector<std::optional<float>> buildEffectiveMaximumVelocityProfile(
+  std::size_t point_count, const FirstOrderDubinsMppiKinematicLimits & limits);
+
+/** Return the common finite maximum when every point has the same limit. */
+[[nodiscard]] std::optional<float> getUniformMaximumVelocity(
+  const std::vector<std::optional<float>> & maximum_velocities);
 
 /**
- * Build the fastest delay-, lag-, acceleration-, and jerk-aware profile toward an external
- * maximum velocity. The result is inactive, and the supplied controls are returned unchanged,
- * unless the maximum velocity is finite and is newly restrictive, is zero, or is being retained
- * from the preceding active cycle.
+ * Build the fastest delay-, lag-, acceleration-, and jerk-aware profile under the effective
+ * external/map maximum-velocity envelope. Uniform limits retain the existing scalar behavior;
+ * varying limits use a backwards reachable envelope so braking begins before a lower future cap.
  */
 [[nodiscard]] ActiveVelocityLimitProfile buildActiveVelocityLimitProfile(
   const std::vector<FirstOrderDubinsMppiControl> & controls, const InitialState & initial_state,
   const FirstOrderDubinsMppiKinematicLimits & limits,
   const FirstOrderDubinsMppiVehicleParams & vehicle_params, int acceleration_delay_steps = 0,
   const std::vector<float> & acceleration_delay_buffer = {}, float dt = kMppiDt,
-  bool keep_active = false);
+  bool keep_active = false, const std::vector<float> & reference_velocities = {});
 
 /** Apply an active profile to trajectory velocity/acceleration fields; inactive is an exact no-op.
  */
@@ -124,7 +135,7 @@ void applyActiveVelocityLimitProfile(
  * The filter predicts the first-order acceleration state through the pending input-delay queue.
  * It preserves steering, clamps acceleration commands to active acceleration bounds, applies
  * active jerk bounds at the time each command reaches the plant, and biases acceleration toward
- * the admissible boundary while predicted velocity is outside [0, max_velocity].
+ * the admissible boundary while predicted velocity is outside the active pointwise interval.
  */
 [[nodiscard]] std::vector<FirstOrderDubinsMppiControl> filterNominalControlWithKinematicLimits(
   const std::vector<FirstOrderDubinsMppiControl> & nominal, const InitialState & initial_state,

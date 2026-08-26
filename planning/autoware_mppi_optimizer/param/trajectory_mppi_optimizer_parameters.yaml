@@ -9,6 +9,21 @@ trajectory_mppi_optimizer:
     default_value: false
     description: Run MPPI without replacing the input trajectory
     read_only: false
+  limit_velocity_from_map:
+    type: bool
+    default_value: false
+    description: Apply the lanelet velocity limit at each input reference trajectory point
+    read_only: false
+  limit_velocity_from_map_debug_lanelet_ids:
+    type: int_array
+    default_value: []
+    description: Lanelet IDs whose map velocity limits are overridden when map limiting is enabled
+    read_only: false
+  limit_velocity_from_map_debug_max_velocities:
+    type: double_array
+    default_value: []
+    description: Finite non-negative debug maximum velocities in m/s aligned with the lanelet IDs
+    read_only: false
   lambda:
     type: double
     default_value: 100.0

@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -149,6 +150,55 @@ TEST_F(TrajectoryValidatorTest, ReportsRunningCostComponentsWithoutChangingTheir
   EXPECT_NEAR(breakdown.total, direct_total, 1.0E-5F);
   EXPECT_EQ(crash_status, 0);
   EXPECT_EQ(direct_crash_status, 0);
+}
+
+TEST_F(TrajectoryValidatorTest, UsesPointwiseMaximumVelocityForEachRunningCostStep)
+{
+  auto params = makeParams();
+  params.speed_coeff = 0.0F;
+  params.track_coeff = 0.0F;
+  params.heading_coeff = 0.0F;
+  params.lateral_distance_coeff = 0.0F;
+  params.lateral_yaw_error_coeff = 0.0F;
+  params.remaining_distance_coeff = 0.0F;
+  params.path_overshoot_coeff = 0.0F;
+  params.track_center_coeff = 0.0F;
+  params.corner_buffer_coeff = 0.0F;
+  params.accel_cmd_coeff = 0.0F;
+  params.steer_cmd_coeff = 0.0F;
+  params.steer_rate_coeff = 0.0F;
+  params.lateral_acceleration_coeff = 0.0F;
+  params.lateral_jerk_coeff = 0.0F;
+  params.longitudinal_jerk_coeff = 0.0F;
+  params.drivable_area_barrier_weight = 0.0F;
+  params.overlimit_coeff = 10.0F;
+  cost_->setParams(params);
+
+  std::array<float, kTestHorizon> x{};
+  std::array<float, kTestHorizon> y{};
+  std::array<float, kTestHorizon> velocity{};
+  std::array<float, kTestHorizon> yaw{};
+  std::array<float, kTestHorizon> maximum_velocity{};
+  std::array<std::uint8_t, kTestHorizon> velocity_limit_active{};
+  velocity.fill(2.0F);
+  maximum_velocity.fill(3.0F);
+  velocity_limit_active.fill(1U);
+  maximum_velocity[1] = 1.0F;
+  cost_->setReferenceTrajectory(
+    x.data(), y.data(), velocity.data(), kTestHorizon, yaw.data(), maximum_velocity.data(),
+    velocity_limit_active.data());
+
+  TestCost::output_array output = TestCost::output_array::Zero();
+  output(static_cast<int>(OutputIndex::BASELINK_VEL_B_X)) = 2.0F;
+  output(static_cast<int>(OutputIndex::TOTAL_VELOCITY)) = 2.0F;
+  TestCost::control_array control = TestCost::control_array::Zero();
+  int crash_status = 0;
+
+  const auto step_zero = cost_->computeRunningCostBreakdown(output, control, 0, &crash_status);
+  const auto step_one = cost_->computeRunningCostBreakdown(output, control, 1, &crash_status);
+
+  EXPECT_FLOAT_EQ(step_zero.kinematic_velocity_overlimit, 0.0F);
+  EXPECT_FLOAT_EQ(step_one.kinematic_velocity_overlimit, 10.0F);
 }
 
 TEST_F(TrajectoryValidatorTest, SmoothBarrierCostRampsUpQuadratically)

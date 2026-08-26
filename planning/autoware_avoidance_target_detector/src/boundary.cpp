@@ -811,16 +811,27 @@ lanelet::BasicPolygon2d ExtendedRouteHandler::get_near_segment_polygon(
 std::optional<double> ExtendedRouteHandler::get_velocity_limit(
   const lanelet::BasicPoint2d & point) const
 {
+  return get_velocity_limit(point, {});
+}
+
+std::optional<double> ExtendedRouteHandler::get_velocity_limit(
+  const lanelet::BasicPoint2d & point, const VelocityLimitOverrides & overrides) const
+{
   const auto nearest_lanelets = get_nearest_lanelets(*route_map_, point);
   if (nearest_lanelets.empty()) {
     return std::nullopt;
   }
 
   std::optional<double> velocity_limit;
+  const auto read_velocity_limit = [&overrides](const lanelet::ConstLanelet & lanelet) {
+    const auto override = overrides.find(lanelet.id());
+    return override != overrides.end() ? std::make_optional(override->second)
+                                       : read_speed_limit_from_lanelet(lanelet);
+  };
 
   for (const auto & lanelet : nearest_lanelets) {
-    // If the lanelet has a speed limit attribute, use it.
-    const auto speed_limit = read_speed_limit_from_lanelet(lanelet);
+    // A debug override takes precedence over the lanelet attribute.
+    const auto speed_limit = read_velocity_limit(lanelet);
     if (speed_limit) {
       velocity_limit = (velocity_limit) ? std::min(*velocity_limit, *speed_limit) : *speed_limit;
       continue;
@@ -833,7 +844,7 @@ std::optional<double> ExtendedRouteHandler::get_velocity_limit(
       const auto right_lanelet =
         traffic_rules::get_right_lanelet(*extended_routing_graph_, lanelet);
       if (right_lanelet) {
-        const auto right_speed_limit = read_speed_limit_from_lanelet(*right_lanelet);
+        const auto right_speed_limit = read_velocity_limit(*right_lanelet);
         if (right_speed_limit) {
           velocity_limit =
             (velocity_limit) ? std::min(*velocity_limit, *right_speed_limit) : *right_speed_limit;
@@ -841,7 +852,7 @@ std::optional<double> ExtendedRouteHandler::get_velocity_limit(
         }
       }
       if (left_lanelet) {
-        const auto left_speed_limit = read_speed_limit_from_lanelet(*left_lanelet);
+        const auto left_speed_limit = read_velocity_limit(*left_lanelet);
         if (left_speed_limit) {
           velocity_limit =
             (velocity_limit) ? std::min(*velocity_limit, *left_speed_limit) : *left_speed_limit;
@@ -860,9 +871,21 @@ std::optional<double> ExtendedRouteHandler::get_velocity_limit(const lanelet::Po
 }
 
 std::optional<double> ExtendedRouteHandler::get_velocity_limit(
+  const lanelet::Point2d & point, const VelocityLimitOverrides & overrides) const
+{
+  return get_velocity_limit(lanelet::BasicPoint2d(point.x(), point.y()), overrides);
+}
+
+std::optional<double> ExtendedRouteHandler::get_velocity_limit(
   const geometry_msgs::msg::Point & point) const
 {
   return get_velocity_limit(lanelet::BasicPoint2d(point.x, point.y));
+}
+
+std::optional<double> ExtendedRouteHandler::get_velocity_limit(
+  const geometry_msgs::msg::Point & point, const VelocityLimitOverrides & overrides) const
+{
+  return get_velocity_limit(lanelet::BasicPoint2d(point.x, point.y), overrides);
 }
 
 Path to_path_msg(const RouteBounds & bounds, const Trajectory & trajectory)

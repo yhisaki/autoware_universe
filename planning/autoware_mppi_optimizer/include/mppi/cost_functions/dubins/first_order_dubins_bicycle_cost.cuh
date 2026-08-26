@@ -12,6 +12,8 @@
 #include <mppi/cost_functions/dubins/first_order_dubins_bicycle_kinematic_limits.cuh>
 #include <mppi/dynamics/dubins/first_order_dubins_bicycle.cuh>
 
+#include <cstdint>
+
 __host__ __device__ inline float computeSmoothBarrierCost(
   const float distance, const float safe_margin, const float precomputed_weight)
 {
@@ -134,7 +136,8 @@ public:
   void paramsToDevice();
 
   void setReferenceTrajectory(
-    const float * x, const float * y, const float * v, int count, const float * yaw = nullptr);
+    const float * x, const float * y, const float * v, int count, const float * yaw = nullptr,
+    const float * max_velocity = nullptr, const std::uint8_t * velocity_limit_active = nullptr);
 
   void setKinematicLimits(const FirstOrderDubinsBicycleKinematicLimitData & limits);
 
@@ -270,7 +273,7 @@ public:
   __device__ float computeComfortCost(float * u, float * y, int timestep);
 
   __host__ __device__ FirstOrderDubinsBicycleKinematicCost computeKinematicLimitCost(
-    float velocity, float longitudinal_acceleration, float longitudinal_jerk) const;
+    float velocity, float longitudinal_acceleration, float longitudinal_jerk, int timestep) const;
 
   __device__ float terminalCost(float * y, float * theta_c);
 
@@ -285,6 +288,9 @@ public:
   float ref_y_[NUM_TIMESTEPS] = {};
   float ref_v_[NUM_TIMESTEPS] = {};
   float ref_yaw_[NUM_TIMESTEPS] = {};
+  float ref_max_velocity_[NUM_TIMESTEPS] = {};
+  std::uint8_t ref_velocity_limit_active_[NUM_TIMESTEPS] = {};
+  bool has_pointwise_velocity_limits_{false};
   FirstOrderDubinsBicycleKinematicLimitData kinematic_limits_{};
   int num_lateral_corridor_points_ = 0;
   float lateral_corridor_x_[kMaxLateralCorridorPoints] = {};

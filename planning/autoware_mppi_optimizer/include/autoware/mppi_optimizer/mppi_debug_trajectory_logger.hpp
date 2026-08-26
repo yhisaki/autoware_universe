@@ -467,13 +467,23 @@ private:
     }
     out << "key,value\n";
     out << std::setprecision(9) << std::fixed;
-    const bool active = limits.max_velocity || limits.min_longitudinal_acceleration ||
+    const bool has_pointwise_velocity_limit = std::any_of(
+      limits.max_velocity_by_reference_point.begin(), limits.max_velocity_by_reference_point.end(),
+      [](const auto & value) { return value.has_value(); });
+    const bool active = limits.max_velocity || has_pointwise_velocity_limit ||
+                        limits.min_longitudinal_acceleration ||
                         limits.max_longitudinal_acceleration || limits.min_longitudinal_jerk ||
                         limits.max_longitudinal_jerk;
     out << "active," << (active ? 1 : 0) << "\n";
     if (limits.max_velocity) {
       out << "min_velocity,0.0\n";
       out << "max_velocity," << *limits.max_velocity << "\n";
+    }
+    for (std::size_t index = 0; index < limits.max_velocity_by_reference_point.size(); ++index) {
+      if (limits.max_velocity_by_reference_point[index]) {
+        out << "max_velocity_point_" << index << ","
+            << *limits.max_velocity_by_reference_point[index] << "\n";
+      }
     }
     if (limits.min_longitudinal_acceleration && limits.max_longitudinal_acceleration) {
       out << "min_longitudinal_acceleration," << *limits.min_longitudinal_acceleration << "\n";

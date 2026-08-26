@@ -70,10 +70,13 @@ struct FirstOrderDubinsMppiRollout
   bool is_worst{false};
 };
 
-/** Optional scalar kinematic bounds supplied by an external VelocityLimit message. */
+/** Optional kinematic bounds supplied by external and map velocity-limit sources. */
 struct FirstOrderDubinsMppiKinematicLimits
 {
+  /** Global maximum supplied by the external VelocityLimit message. */
   std::optional<float> max_velocity;
+  /** Optional map maximum aligned with each point of the input reference trajectory. */
+  std::vector<std::optional<float>> max_velocity_by_reference_point;
   std::optional<float> min_longitudinal_acceleration;
   std::optional<float> max_longitudinal_acceleration;
   std::optional<float> min_longitudinal_jerk;
@@ -204,8 +207,14 @@ struct FirstOrderDubinsMppiDebug
   float baseline_cost{0.0F};
   /** Hard-constraint validation of the generated post-step states. */
   FirstOrderDubinsMppiValidationResult validation;
-  /** True while the deterministic external maximum-velocity profile is applied. */
+  /** True while the deterministic external-only maximum-velocity profile is applied. */
   bool external_velocity_limit_active{false};
+  /** True while any deterministic external/map maximum-velocity profile is applied. */
+  bool velocity_limit_profile_active{false};
+  /** True when at least one valid map-derived pointwise maximum was supplied. */
+  bool map_velocity_limit_active{false};
+  /** Effective external/map minimum aligned with reference_trajectory.points. */
+  std::vector<std::optional<float>> effective_max_velocity_by_reference_point;
   /** True when skip_if_invalid replaced the optimized trajectory with the input trajectory. */
   bool was_rejected{false};
 };
@@ -344,7 +353,8 @@ public:
    * @param road_borders Static road-border segments used by the gradual optimizer cost and hard
    *        output validator.
    * @param drivable_area Static drivable-area boundary segments used as a gradual constraint.
-   * @param kinematic_limits Optional external scalar velocity, acceleration, and jerk bounds.
+   * @param kinematic_limits Optional external scalar and map pointwise velocity bounds, plus
+   *        external acceleration and jerk bounds.
    */
   FirstOrderDubinsMppiOptimizationResult optimizeTrajectory(
     const Trajectory & input, const Odometry & odometry,

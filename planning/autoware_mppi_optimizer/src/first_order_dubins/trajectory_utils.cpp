@@ -113,7 +113,8 @@ std::vector<float> computeCumulativeChordLength(const Trajectory & trajectory)
 
 std::vector<ReferenceSample> buildReferenceHorizon(
   const Trajectory & trajectory, const InitialState & ego, const int horizon, const float dt,
-  const size_t start_idx, const std::vector<float> * cumulative_chord_length_s)
+  const size_t start_idx, const std::vector<float> * cumulative_chord_length_s,
+  const std::vector<std::optional<float>> * maximum_velocities)
 {
   const size_t sample_count = std::max(0, horizon);
   std::vector<ReferenceSample> reference(static_cast<std::size_t>(sample_count));
@@ -148,29 +149,76 @@ std::vector<ReferenceSample> buildReferenceHorizon(
     sample.y = static_cast<float>(point.pose.position.y);
     sample.yaw = static_cast<float>(tf2::getYaw(point.pose.orientation));
     sample.velocity = point.longitudinal_velocity_mps;
+    if (maximum_velocities && source_idx < maximum_velocities->size()) {
+      sample.max_velocity = (*maximum_velocities)[source_idx];
+      if (sample.max_velocity) {
+        sample.velocity = std::clamp(sample.velocity, 0.0F, *sample.max_velocity);
+      }
+    }
     sample.arc_length_s = source_idx < chord_length_s.size() ? chord_length_s[source_idx] : 0.0F;
   }
   return reference;
+}
+
+std::vector<std::optional<float>> buildEffectiveMaximumVelocityProfile(
+  const std::size_t point_count, const FirstOrderDubinsMppiKinematicLimits & limits)
+{
+  const bool valid_external =
+    limits.max_velocity && std::isfinite(*limits.max_velocity) && *limits.max_velocity >= 0.0F;
+  std::vector<std::optional<float>> result(
+    point_count, valid_external ? limits.max_velocity : std::nullopt);
+
+  for (std::size_t index = 0;
+       index < point_count && !limits.max_velocity_by_reference_point.empty(); ++index) {
+    const std::size_t map_index =
+      std::min(index, limits.max_velocity_by_reference_point.size() - 1U);
+    const auto map_limit = limits.max_velocity_by_reference_point[map_index];
+    if (!map_limit || !std::isfinite(*map_limit) || *map_limit < 0.0F) {
+      continue;
+    }
+    result[index] = result[index] ? std::min(*result[index], *map_limit) : map_limit;
+  }
+  return result;
+}
+
+std::optional<float> getUniformMaximumVelocity(
+  const std::vector<std::optional<float>> & maximum_velocities)
+{
+  if (maximum_velocities.empty() || !maximum_velocities.front()) {
+    return std::nullopt;
+  }
+  const float first = *maximum_velocities.front();
+  const bool uniform =
+    std::all_of(maximum_velocities.begin(), maximum_velocities.end(), [first](const auto & value) {
+      constexpr float kUniformToleranceMps = 1.0E-6F;
+      return value && std::abs(*value - first) <= kUniformToleranceMps;
+    });
+  return uniform ? std::make_optional(first) : std::nullopt;
 }
 
 ActiveVelocityLimitProfile buildActiveVelocityLimitProfile(
   const std::vector<FirstOrderDubinsMppiControl> & controls, const InitialState & initial_state,
   const FirstOrderDubinsMppiKinematicLimits & limits,
   const FirstOrderDubinsMppiVehicleParams & vehicle_params, const int acceleration_delay_steps,
-  const std::vector<float> & acceleration_delay_buffer, const float dt, const bool keep_active)
+  const std::vector<float> & acceleration_delay_buffer, const float dt, const bool keep_active,
+  const std::vector<float> & reference_velocities)
 {
   ActiveVelocityLimitProfile profile;
   profile.controls = controls;
 
+  const auto maximum_velocities = buildEffectiveMaximumVelocityProfile(controls.size(), limits);
+  profile.maximum_velocities = maximum_velocities;
+  const auto uniform_maximum_velocity = getUniformMaximumVelocity(maximum_velocities);
+  const bool has_pointwise_velocity_limit = std::any_of(
+    maximum_velocities.begin(), maximum_velocities.end(),
+    [](const auto & value) { return value.has_value(); });
+  const bool has_variable_velocity_limit =
+    has_pointwise_velocity_limit && !uniform_maximum_velocity;
+
   constexpr float kActivationToleranceMps = 1.0E-3F;
-  const bool has_valid_velocity_limit =
-    limits.max_velocity && std::isfinite(*limits.max_velocity) && *limits.max_velocity >= 0.0F;
-  const bool has_restrictive_velocity_limit =
-    has_valid_velocity_limit && std::isfinite(initial_state.velocity) &&
-    (initial_state.velocity > *limits.max_velocity + kActivationToleranceMps || keep_active ||
-     (*limits.max_velocity <= kActivationToleranceMps &&
-      initial_state.velocity >= -kActivationToleranceMps));
-  if (!has_restrictive_velocity_limit || controls.empty() || !std::isfinite(dt) || dt <= 0.0F) {
+  if (
+    !has_pointwise_velocity_limit || !std::isfinite(initial_state.velocity) || controls.empty() ||
+    !std::isfinite(dt) || dt <= 0.0F) {
     return profile;
   }
 
@@ -201,10 +249,51 @@ ActiveVelocityLimitProfile buildActiveVelocityLimitProfile(
   const float acceleration_time_constant = std::isfinite(vehicle_params.acc_time_constant)
                                              ? std::max(vehicle_params.acc_time_constant, 1.0E-4F)
                                              : 1.0E-4F;
+  const float time_horizon = std::max(0.5F, safe_dt + acceleration_time_constant);
   const float minimum_jerk =
     has_jerk_limits ? *limits.min_longitudinal_jerk : -std::numeric_limits<float>::infinity();
   const float maximum_jerk =
     has_jerk_limits ? *limits.max_longitudinal_jerk : std::numeric_limits<float>::infinity();
+
+  // A varying maximum is converted into a backwards reachable envelope. This starts braking
+  // before a lower future limit instead of waiting until the first already-limited point.
+  auto admissible_maximum_velocities = maximum_velocities;
+  if (has_variable_velocity_limit) {
+    std::optional<float> next_maximum;
+    for (std::size_t offset = 0; offset < admissible_maximum_velocities.size(); ++offset) {
+      const std::size_t index = admissible_maximum_velocities.size() - 1U - offset;
+      auto & maximum = admissible_maximum_velocities[index];
+      if (next_maximum) {
+        const float reachable_maximum = *next_maximum - minimum_acceleration * safe_dt;
+        maximum =
+          maximum ? std::min(*maximum, reachable_maximum) : std::make_optional(reachable_maximum);
+      }
+      if (maximum) {
+        next_maximum = maximum;
+      }
+    }
+  }
+
+  bool has_restrictive_velocity_limit = keep_active;
+  if (uniform_maximum_velocity) {
+    has_restrictive_velocity_limit =
+      has_restrictive_velocity_limit ||
+      initial_state.velocity > *uniform_maximum_velocity + kActivationToleranceMps ||
+      (*uniform_maximum_velocity <= kActivationToleranceMps &&
+       initial_state.velocity >= -kActivationToleranceMps);
+  } else {
+    float unbraked_velocity = initial_state.velocity;
+    for (const auto & maximum : admissible_maximum_velocities) {
+      unbraked_velocity = std::max(0.0F, unbraked_velocity + initial_state.acceleration * safe_dt);
+      if (maximum && unbraked_velocity > *maximum + kActivationToleranceMps) {
+        has_restrictive_velocity_limit = true;
+        break;
+      }
+    }
+  }
+  if (!has_restrictive_velocity_limit) {
+    return profile;
+  }
 
   const auto command_for_jerk = [&](
                                   const float acceleration, const float jerk, const bool braking) {
@@ -259,7 +348,14 @@ ActiveVelocityLimitProfile buildActiveVelocityLimitProfile(
   }
 
   profile.active = true;
-  profile.target_velocity = *limits.max_velocity;
+  if (uniform_maximum_velocity) {
+    profile.target_velocity = *uniform_maximum_velocity;
+  } else {
+    const auto last_maximum = std::find_if(
+      maximum_velocities.rbegin(), maximum_velocities.rend(),
+      [](const auto & value) { return value.has_value(); });
+    profile.target_velocity = last_maximum != maximum_velocities.rend() ? **last_maximum : 0.0F;
+  }
   profile.velocities.reserve(controls.size());
   profile.accelerations.reserve(controls.size());
   float velocity = initial_state.velocity;
@@ -276,13 +372,38 @@ ActiveVelocityLimitProfile buildActiveVelocityLimitProfile(
       advance_plant(pending_command, application_velocity, application_acceleration);
     }
 
-    const float remaining_velocity = std::max(0.0F, application_velocity - profile.target_velocity);
+    const std::size_t application_index =
+      std::min(index + pending_commands.size(), admissible_maximum_velocities.size() - 1U);
+    const auto target_velocity = uniform_maximum_velocity
+                                   ? uniform_maximum_velocity
+                                   : admissible_maximum_velocities[application_index];
+    const float remaining_velocity =
+      target_velocity ? std::max(0.0F, application_velocity - *target_velocity) : 0.0F;
     const float release_loss = release_velocity_loss(application_acceleration);
-    const bool release_brake = remaining_velocity <= release_loss + kActivationToleranceMps;
+    const bool release_brake =
+      !target_velocity || remaining_velocity <= release_loss + kActivationToleranceMps;
     float command = release_brake ? command_for_jerk(application_acceleration, maximum_jerk, false)
                                   : command_for_jerk(application_acceleration, minimum_jerk, true);
+    bool accelerate_to_reference = false;
     if (
-      application_velocity <= profile.target_velocity + kActivationToleranceMps &&
+      has_variable_velocity_limit && release_brake && target_velocity &&
+      application_acceleration >= -kActivationToleranceMps &&
+      application_index < reference_velocities.size()) {
+      const float desired_velocity =
+        std::min(std::max(0.0F, reference_velocities[application_index]), *target_velocity);
+      if (application_velocity < desired_velocity - kActivationToleranceMps) {
+        accelerate_to_reference = true;
+        const float desired_accel = (desired_velocity - application_velocity) / time_horizon;
+        const float unconstrained = std::clamp(
+          desired_accel, application_acceleration + minimum_jerk * acceleration_time_constant,
+          application_acceleration + maximum_jerk * acceleration_time_constant);
+        command =
+          std::clamp(unconstrained, std::max(0.0F, minimum_acceleration), maximum_acceleration);
+      }
+    }
+    if (
+      !accelerate_to_reference && target_velocity &&
+      application_velocity <= *target_velocity + kActivationToleranceMps &&
       application_acceleration >= -kActivationToleranceMps) {
       command = 0.0F;
     }
@@ -434,8 +555,11 @@ std::vector<FirstOrderDubinsMppiControl> filterNominalControlWithKinematicLimits
   const FirstOrderDubinsMppiVehicleParams & vehicle_params, const int acceleration_delay_steps,
   const std::vector<float> & acceleration_delay_buffer, const float dt)
 {
-  const bool has_velocity_limit =
-    limits.max_velocity && std::isfinite(*limits.max_velocity) && *limits.max_velocity >= 0.0F;
+  auto maximum_velocities = buildEffectiveMaximumVelocityProfile(nominal.size(), limits);
+  const auto uniform_maximum_velocity = getUniformMaximumVelocity(maximum_velocities);
+  const bool has_velocity_limit = std::any_of(
+    maximum_velocities.begin(), maximum_velocities.end(),
+    [](const auto & value) { return value.has_value(); });
   const bool has_acceleration_limits =
     limits.min_longitudinal_acceleration && limits.max_longitudinal_acceleration &&
     std::isfinite(*limits.min_longitudinal_acceleration) &&
@@ -456,6 +580,7 @@ std::vector<FirstOrderDubinsMppiControl> filterNominalControlWithKinematicLimits
   const float acceleration_time_constant = std::isfinite(vehicle_params.acc_time_constant)
                                              ? std::max(vehicle_params.acc_time_constant, 1.0E-4F)
                                              : 1.0E-4F;
+  const float time_horizon = std::max(0.5F, safe_dt + acceleration_time_constant);
   const float minimum_acceleration = std::max(
     vehicle_params.min_accel(),
     has_acceleration_limits ? *limits.min_longitudinal_acceleration : vehicle_params.min_accel());
@@ -470,8 +595,21 @@ std::vector<FirstOrderDubinsMppiControl> filterNominalControlWithKinematicLimits
     has_jerk_limits ? *limits.min_longitudinal_jerk : -std::numeric_limits<float>::infinity();
   const float maximum_jerk =
     has_jerk_limits ? *limits.max_longitudinal_jerk : std::numeric_limits<float>::infinity();
-  const float maximum_velocity =
-    has_velocity_limit ? *limits.max_velocity : std::numeric_limits<float>::infinity();
+  if (has_velocity_limit && !uniform_maximum_velocity) {
+    std::optional<float> next_maximum;
+    for (std::size_t offset = 0; offset < maximum_velocities.size(); ++offset) {
+      const std::size_t index = maximum_velocities.size() - 1U - offset;
+      auto & maximum = maximum_velocities[index];
+      if (next_maximum) {
+        const float reachable_maximum = *next_maximum - minimum_acceleration * safe_dt;
+        maximum =
+          maximum ? std::min(*maximum, reachable_maximum) : std::make_optional(reachable_maximum);
+      }
+      if (maximum) {
+        next_maximum = maximum;
+      }
+    }
+  }
 
   const int delay_steps = std::max(0, acceleration_delay_steps);
   std::deque<float> pending_commands;
@@ -509,14 +647,18 @@ std::vector<FirstOrderDubinsMppiControl> filterNominalControlWithKinematicLimits
     float command = std::clamp(nominal[i].accel_cmd, minimum_acceleration, maximum_acceleration);
     const float next_application_velocity =
       application_velocity + application_acceleration * safe_dt;
-    if (next_application_velocity > maximum_velocity) {
+    const std::size_t application_index =
+      std::min(i + pending_commands.size(), maximum_velocities.size() - 1U);
+    const auto maximum_velocity =
+      uniform_maximum_velocity ? uniform_maximum_velocity : maximum_velocities[application_index];
+    if (maximum_velocity && next_application_velocity > *maximum_velocity) {
       const float braking_command = std::clamp(
-        (maximum_velocity - next_application_velocity) / safe_dt, minimum_acceleration,
+        (*maximum_velocity - next_application_velocity) / time_horizon, minimum_acceleration,
         maximum_acceleration);
       command = std::min(command, braking_command);
     } else if (has_velocity_limit && next_application_velocity < 0.0F) {
       const float recovery_command = std::clamp(
-        -next_application_velocity / safe_dt, minimum_acceleration, maximum_acceleration);
+        -next_application_velocity / time_horizon, minimum_acceleration, maximum_acceleration);
       command = std::max(command, recovery_command);
     }
 

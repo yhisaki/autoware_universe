@@ -336,6 +336,25 @@ TEST_F(ExtendedRouteHandlerTest, GetVelocityLimit_MultipleNearbyLaneletsReturnMi
   EXPECT_DOUBLE_EQ(*velocity_limit, k_low_speed_mps);
 }
 
+TEST_F(ExtendedRouteHandlerTest, GetVelocityLimit_DebugOverrideReplacesLaneletAttribute)
+{
+  const ExtendedRouteHandler::VelocityLimitOverrides overrides{{k_main_ids[0], 4.0}};
+  const auto velocity_limit = handler_->get_velocity_limit(make_point(5.0, 0.0), overrides);
+
+  ASSERT_TRUE(velocity_limit);
+  EXPECT_DOUBLE_EQ(*velocity_limit, 4.0);
+}
+
+TEST_F(ExtendedRouteHandlerTest, GetVelocityLimit_DebugOverridesStillUseNearbyMinimum)
+{
+  const ExtendedRouteHandler::VelocityLimitOverrides overrides{
+    {k_main_ids[1], 10.0}, {k_shoulder_ids[1], 4.0}};
+  const auto velocity_limit = handler_->get_velocity_limit(make_point(15.0, -2.0), overrides);
+
+  ASSERT_TRUE(velocity_limit);
+  EXPECT_DOUBLE_EQ(*velocity_limit, 4.0);
+}
+
 TEST_F(ExtendedRouteHandlerTest, ToPathMsg_PopulatesBoundsAndKinematicsCorrectly)
 {
   lanelet::LineString2d left_bound{lanelet::utils::getId()};

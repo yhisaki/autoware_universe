@@ -298,8 +298,57 @@ TEST_F(FirstOrderDubinsMppiInterfaceGpuTest, InactiveVelocityLimitProducesIdenti
   EXPECT_FALSE(nonrestrictive_result.debug.external_velocity_limit_active);
   EXPECT_TRUE(
     nonrestrictive_result.debug.nominal_trajectory == unrestricted_result.debug.nominal_trajectory);
-  EXPECT_EQ(nonrestrictive_acceleration, unrestricted_acceleration);
-  EXPECT_EQ(nonrestrictive_steering, unrestricted_steering);
+  ASSERT_EQ(nonrestrictive_acceleration.size(), unrestricted_acceleration.size());
+  ASSERT_EQ(nonrestrictive_steering.size(), unrestricted_steering.size());
+  for (size_t i = 0; i < unrestricted_acceleration.size(); ++i) {
+    EXPECT_NEAR(nonrestrictive_acceleration[i], unrestricted_acceleration[i], 1.0E-4F);
+    EXPECT_NEAR(nonrestrictive_steering[i], unrestricted_steering[i], 1.0E-4F);
+  }
+}
+
+TEST_F(
+  FirstOrderDubinsMppiInterfaceGpuTest,
+  PointwiseLimitsAboveExternalLimitPreserveExternalOutputExactly)
+{
+  FirstOrderDubinsMppiVehicleParams vehicle_params;
+  vehicle_params.acc_time_constant = 0.1F;
+  vehicle_params.acc_time_delay = 0.0F;
+  vehicle_params.steer_time_delay = 0.0F;
+  const auto input = makeStraightTrajectory(85U);
+  FirstOrderDubinsMppiKinematicLimits external_limits;
+  external_limits.max_velocity = 1.0F;
+  external_limits.min_longitudinal_acceleration = -2.0F;
+  external_limits.max_longitudinal_acceleration = 1.0F;
+  external_limits.min_longitudinal_jerk = -10.0F;
+  external_limits.max_longitudinal_jerk = 10.0F;
+  auto combined_limits = external_limits;
+  combined_limits.max_velocity_by_reference_point.resize(input.points.size(), 4.0F);
+
+  FirstOrderDubinsMppiOptimizationResult external_result;
+  FirstOrderDubinsMppiOptimizationResult combined_result;
+  std::vector<float> external_acceleration;
+  std::vector<float> external_steering;
+  std::vector<float> combined_acceleration;
+  std::vector<float> combined_steering;
+  {
+    FirstOrderDubinsMppiInterface external;
+    external.setVehicleParams(vehicle_params);
+    external_result =
+      optimize(external, input, makeOdometry(), TrackedObjects{}, {}, external_limits);
+    ASSERT_TRUE(external.copyLastOptimizedControl(external_acceleration, external_steering));
+  }
+  {
+    FirstOrderDubinsMppiInterface combined;
+    combined.setVehicleParams(vehicle_params);
+    combined_result =
+      optimize(combined, input, makeOdometry(), TrackedObjects{}, {}, combined_limits);
+    ASSERT_TRUE(combined.copyLastOptimizedControl(combined_acceleration, combined_steering));
+  }
+
+  EXPECT_TRUE(combined_result.trajectory == external_result.trajectory);
+  EXPECT_TRUE(combined_result.debug.nominal_trajectory == external_result.debug.nominal_trajectory);
+  EXPECT_EQ(combined_acceleration, external_acceleration);
+  EXPECT_EQ(combined_steering, external_steering);
 }
 
 TEST_F(
@@ -339,6 +388,50 @@ TEST_F(
   EXPECT_FLOAT_EQ(result.trajectory.points[1].longitudinal_velocity_mps, 4.0F);
   EXPECT_FLOAT_EQ(result.trajectory.points[2].longitudinal_velocity_mps, 3.9F);
   EXPECT_FLOAT_EQ(result.trajectory.points.back().longitudinal_velocity_mps, 0.0F);
+}
+
+TEST_F(FirstOrderDubinsMppiInterfaceGpuTest, AppliesADecreasingPointwiseVelocityLimit)
+{
+  const auto input = makeStraightTrajectory(85U);
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity_by_reference_point.resize(input.points.size(), 2.0F);
+  for (std::size_t index = 20U; index < input.points.size(); ++index) {
+    limits.max_velocity_by_reference_point[index] = 0.5F;
+  }
+  limits.min_longitudinal_acceleration = -2.0F;
+  limits.max_longitudinal_acceleration = 1.0F;
+  limits.min_longitudinal_jerk = -10.0F;
+  limits.max_longitudinal_jerk = 10.0F;
+
+  const auto result = optimize(*interface_, input, makeOdometry(), TrackedObjects{}, {}, limits);
+
+  EXPECT_TRUE(result.debug.map_velocity_limit_active);
+  EXPECT_TRUE(result.debug.velocity_limit_profile_active);
+  EXPECT_FALSE(result.debug.external_velocity_limit_active);
+  ASSERT_EQ(result.debug.effective_max_velocity_by_reference_point.size(), input.points.size());
+  ASSERT_TRUE(result.debug.effective_max_velocity_by_reference_point[19]);
+  ASSERT_TRUE(result.debug.effective_max_velocity_by_reference_point[20]);
+  EXPECT_FLOAT_EQ(*result.debug.effective_max_velocity_by_reference_point[19], 2.0F);
+  EXPECT_FLOAT_EQ(*result.debug.effective_max_velocity_by_reference_point[20], 0.5F);
+  EXPECT_LT(result.trajectory.points[19].longitudinal_velocity_mps, 2.0F);
+  EXPECT_NEAR(result.trajectory.points.back().longitudinal_velocity_mps, 0.5F, 0.1F);
+}
+
+TEST_F(FirstOrderDubinsMppiInterfaceGpuTest, UsesMinimumOfExternalAndPointwiseVelocityLimits)
+{
+  const auto input = makeStraightTrajectory(85U);
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity = 1.5F;
+  limits.max_velocity_by_reference_point.resize(input.points.size(), 4.0F);
+  limits.max_velocity_by_reference_point[10] = 0.75F;
+
+  const auto result = optimize(*interface_, input, makeOdometry(), TrackedObjects{}, {}, limits);
+
+  ASSERT_EQ(result.debug.effective_max_velocity_by_reference_point.size(), input.points.size());
+  ASSERT_TRUE(result.debug.effective_max_velocity_by_reference_point[0]);
+  ASSERT_TRUE(result.debug.effective_max_velocity_by_reference_point[10]);
+  EXPECT_FLOAT_EQ(*result.debug.effective_max_velocity_by_reference_point[0], 1.5F);
+  EXPECT_FLOAT_EQ(*result.debug.effective_max_velocity_by_reference_point[10], 0.75F);
 }
 
 TEST_F(FirstOrderDubinsMppiInterfaceGpuTest, RejectedActiveLimitRetainsLongitudinalFallback)

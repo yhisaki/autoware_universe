@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <vector>
 
@@ -153,6 +154,57 @@ TEST(ReferenceHorizon, EmptyInputHoldsTheMeasuredEgoState)
   }
 }
 
+TEST(VelocityLimitProfile, CombinesExternalAndMapLimitsPointwise)
+{
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity = 8.0F;
+  limits.max_velocity_by_reference_point = {10.0F, 4.0F, std::nullopt, -1.0F};
+
+  const auto effective = buildEffectiveMaximumVelocityProfile(4U, limits);
+
+  ASSERT_EQ(effective.size(), 4U);
+  ASSERT_TRUE(effective[0]);
+  ASSERT_TRUE(effective[1]);
+  ASSERT_TRUE(effective[2]);
+  ASSERT_TRUE(effective[3]);
+  EXPECT_FLOAT_EQ(*effective[0], 8.0F);
+  EXPECT_FLOAT_EQ(*effective[1], 4.0F);
+  EXPECT_FLOAT_EQ(*effective[2], 8.0F);
+  EXPECT_FLOAT_EQ(*effective[3], 8.0F);
+  ASSERT_FALSE(getUniformMaximumVelocity(effective));
+}
+
+TEST(VelocityLimitProfile, RecognizesUniformExternalLimit)
+{
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity = 4.0F;
+
+  const auto effective = buildEffectiveMaximumVelocityProfile(5U, limits);
+  const auto uniform = getUniformMaximumVelocity(effective);
+
+  ASSERT_TRUE(uniform);
+  EXPECT_FLOAT_EQ(*uniform, 4.0F);
+}
+
+TEST(ReferenceHorizon, CarriesAndAppliesPointwiseMaximumVelocity)
+{
+  auto trajectory = makeTrajectory(3U, 1.0, 8.0F);
+  const std::vector<std::optional<float>> maximum_velocities = {10.0F, 4.0F, std::nullopt};
+
+  const auto reference =
+    buildReferenceHorizon(trajectory, InitialState{}, 3, 0.1F, 0U, nullptr, &maximum_velocities);
+
+  ASSERT_EQ(reference.size(), 3U);
+  EXPECT_FLOAT_EQ(reference[0].velocity, 8.0F);
+  ASSERT_TRUE(reference[0].max_velocity);
+  EXPECT_FLOAT_EQ(*reference[0].max_velocity, 10.0F);
+  EXPECT_FLOAT_EQ(reference[1].velocity, 4.0F);
+  ASSERT_TRUE(reference[1].max_velocity);
+  EXPECT_FLOAT_EQ(*reference[1].max_velocity, 4.0F);
+  EXPECT_FALSE(reference[2].max_velocity);
+  EXPECT_FLOAT_EQ(reference[2].velocity, 8.0F);
+}
+
 TEST(ActiveVelocityLimitProfile, InactivePathPreservesControlsAndTrajectoryExactly)
 {
   const std::vector<FirstOrderDubinsMppiControl> controls = {{-1.0F, 0.2F}, {0.5F, -0.3F}};
@@ -251,6 +303,90 @@ TEST(ActiveVelocityLimitProfile, SettlesAtNonzeroLimitInsteadOfStopping)
   EXPECT_NEAR(trajectory.points[39].longitudinal_velocity_mps, 2.0F, 0.05F);
   EXPECT_FLOAT_EQ(trajectory.points.back().longitudinal_velocity_mps, 2.0F);
   EXPECT_FLOAT_EQ(trajectory.points.back().acceleration_mps2, 0.0F);
+}
+
+TEST(ActiveVelocityLimitProfile, AnticipatesADecreasingPointwiseLimit)
+{
+  const std::vector<FirstOrderDubinsMppiControl> controls(30U);
+  InitialState ego;
+  ego.velocity = 4.0F;
+  FirstOrderDubinsMppiVehicleParams vehicle;
+  vehicle.acc_time_constant = 0.1F;
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity_by_reference_point.resize(controls.size(), 4.0F);
+  for (std::size_t index = 15U; index < controls.size(); ++index) {
+    limits.max_velocity_by_reference_point[index] = 2.0F;
+  }
+  limits.min_longitudinal_acceleration = -2.0F;
+  limits.max_longitudinal_acceleration = 1.0F;
+  limits.min_longitudinal_jerk = -10.0F;
+  limits.max_longitudinal_jerk = 10.0F;
+
+  const auto profile = buildActiveVelocityLimitProfile(controls, ego, limits, vehicle);
+
+  ASSERT_TRUE(profile.active);
+  ASSERT_EQ(profile.velocities.size(), controls.size());
+  const auto first_braking_command = std::find_if(
+    profile.controls.begin(), profile.controls.end(),
+    [](const auto & control) { return control.accel_cmd < -1.0E-4F; });
+  ASSERT_NE(first_braking_command, profile.controls.end());
+  EXPECT_LT(
+    static_cast<std::size_t>(std::distance(profile.controls.begin(), first_braking_command)), 15U);
+  EXPECT_NEAR(profile.velocities.back(), 2.0F, 0.1F);
+}
+
+TEST(ActiveVelocityLimitProfile, AcceleratesTowardReferenceAfterPointwiseLimitIncreases)
+{
+  const std::vector<FirstOrderDubinsMppiControl> controls(60U);
+  const std::vector<float> reference_velocities(controls.size(), 4.0F);
+  InitialState ego;
+  ego.velocity = 4.0F;
+  FirstOrderDubinsMppiVehicleParams vehicle;
+  vehicle.acc_time_constant = 0.1F;
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity_by_reference_point.resize(controls.size(), 4.0F);
+  for (std::size_t index = 0U; index < 20U; ++index) {
+    limits.max_velocity_by_reference_point[index] = 2.0F;
+  }
+  limits.min_longitudinal_acceleration = -2.0F;
+  limits.max_longitudinal_acceleration = 1.0F;
+  limits.min_longitudinal_jerk = -10.0F;
+  limits.max_longitudinal_jerk = 10.0F;
+
+  const auto profile = buildActiveVelocityLimitProfile(
+    controls, ego, limits, vehicle, 0, {}, 0.1F, false, reference_velocities);
+
+  ASSERT_TRUE(profile.active);
+  EXPECT_TRUE(
+    std::any_of(profile.controls.begin() + 20, profile.controls.end(), [](const auto & control) {
+      return control.accel_cmd > 1.0E-4F;
+    }));
+  EXPECT_GT(profile.velocities.back(), 2.0F);
+  EXPECT_LE(profile.velocities.back(), 4.0F + 0.1F);
+}
+
+TEST(ActiveVelocityLimitProfile, UsesLookaheadProportionalAccelerationNearReference)
+{
+  const std::vector<FirstOrderDubinsMppiControl> controls(3U);
+  const std::vector<float> reference_velocities = {1.0F, 1.1F, 1.1F};
+  InitialState ego;
+  ego.velocity = 1.0F;
+  FirstOrderDubinsMppiVehicleParams vehicle;
+  vehicle.acc_time_constant = 0.1F;
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity_by_reference_point = {1.0F, 2.0F, 2.0F};
+  limits.min_longitudinal_acceleration = -2.0F;
+  limits.max_longitudinal_acceleration = 1.0F;
+  limits.min_longitudinal_jerk = -10.0F;
+  limits.max_longitudinal_jerk = 10.0F;
+
+  const auto profile = buildActiveVelocityLimitProfile(
+    controls, ego, limits, vehicle, 0, {}, 0.1F, true, reference_velocities);
+
+  ASSERT_TRUE(profile.active);
+  ASSERT_EQ(profile.controls.size(), controls.size());
+  EXPECT_NEAR(profile.controls[1].accel_cmd, 0.2F, 1.0E-5F);
+  EXPECT_LT(profile.controls[1].accel_cmd, limits.max_longitudinal_acceleration.value());
 }
 
 TEST(ActiveVelocityLimitProfile, RetainsOnlyAnExplicitlyActiveUnchangedLimit)
@@ -512,6 +648,29 @@ TEST(NominalControlFilter, ZeroVelocityLimitSeedsStrongestDelayAwareBraking)
   EXPECT_FLOAT_EQ(filtered[1].accel_cmd, -2.0F);
   EXPECT_FLOAT_EQ(filtered[2].accel_cmd, -2.0F);
   EXPECT_FLOAT_EQ(filtered[3].accel_cmd, -2.0F);
+}
+
+TEST(NominalControlFilter, UsesLookaheadProportionalBrakingNearVelocityLimit)
+{
+  const std::vector<FirstOrderDubinsMppiControl> nominal(1U, {0.0F, 0.1F});
+  InitialState ego;
+  ego.velocity = 2.1F;
+  ego.acceleration = 0.0F;
+  FirstOrderDubinsMppiVehicleParams vehicle;
+  vehicle.acc_time_constant = 0.1F;
+  FirstOrderDubinsMppiKinematicLimits limits;
+  limits.max_velocity = 2.0F;
+  limits.min_longitudinal_acceleration = -2.0F;
+  limits.max_longitudinal_acceleration = 1.0F;
+  limits.min_longitudinal_jerk = -10.0F;
+  limits.max_longitudinal_jerk = 10.0F;
+
+  const auto filtered =
+    filterNominalControlWithKinematicLimits(nominal, ego, limits, vehicle, 0, {}, 0.1F);
+
+  ASSERT_EQ(filtered.size(), nominal.size());
+  EXPECT_NEAR(filtered[0].accel_cmd, -0.2F, 1.0E-5F);
+  EXPECT_GT(filtered[0].accel_cmd, limits.min_longitudinal_acceleration.value());
 }
 
 TEST(NominalControlFilter, DoesNotImposeMinimumVelocityWithoutVelocityLimit)
