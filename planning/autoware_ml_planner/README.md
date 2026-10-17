@@ -43,7 +43,7 @@ ros2 launch autoware_launch planning_simulator.launch.xml \
 
 ## Features
 
-- **Diffusion-based trajectory generation** for flexible and robust planning
+- **Regression-based trajectory generation** in a single forward pass
 
   [![Diffusion-Based trajectory generation](media/ml_planner.gif)](media/ml_planner.gif)
 
@@ -132,7 +132,6 @@ Parameters can be set via YAML (see `config/ml_planner.param.yaml`).
 | ------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------- |
 | `~/output/trajectory`           | autoware_planning_msgs/msg/Trajectory                     | Planned trajectory for the ego vehicle                     |
 | `~/output/trajectories`         | autoware_internal_planning_msgs/msg/CandidateTrajectories | Multiple candidate trajectories                            |
-| `~/output/predicted_objects`    | autoware_perception_msgs/msg/PredictedObjects             | Predicted future states of dynamic objects                 |
 | `~/output/turn_indicators`      | autoware_vehicle_msgs/msg/TurnIndicatorsCommand           | Planned turn indicator command                             |
 | `~/output/debug/traffic_signal` | autoware_perception_msgs/msg/TrafficLightGroup            | First traffic light on route (ego forward) for RViz/ad_api |
 | `~/debug/lane_marker`           | visualization_msgs/msg/MarkerArray                        | Lane debug markers                                         |
@@ -155,7 +154,7 @@ colcon test-result --all
 
 The ML Planner relies on an ONNX model for inference.
 
-The sampler model consumes the `turn_indicators` history tensor and returns both `trajectory`
+The planner model consumes the `turn_indicators` history tensor and returns both `trajectory`
 and `turn_indicator_logits`. The three logit classes are DISABLE, ENABLE_LEFT, and ENABLE_RIGHT.
 To ensure compatibility between models and the ROS 2 node implementation, the model versioning scheme follows **major** and **minor** numbers.
 

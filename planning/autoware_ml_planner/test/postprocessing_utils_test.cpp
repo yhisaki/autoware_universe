@@ -32,26 +32,33 @@ namespace autoware::ml_planner::test
 {
 using autoware_planning_msgs::msg::Trajectory;
 
-TEST(PostprocessingUtilsTest, CreateTrajectoryAndMultipleTrajectories)
+TEST(PostprocessingUtilsTest, CreateTrajectoryFromControls)
 {
-  constexpr auto prediction_shape = OUTPUT_SHAPE;
-  auto batch_size = prediction_shape[0];
-  auto agent_size = prediction_shape[1];
-  auto rows = prediction_shape[2];
-  auto cols = prediction_shape[3];
-  std::vector<float> data(batch_size * agent_size * rows * cols, 0.0f);
-  // Fill with some values for checking
-  for (size_t i = 0; i < data.size(); ++i) data[i] = static_cast<float>(i);
+  // Zero normalized controls keep the current velocity and steering.
+  const std::vector<float> controls(OUTPUT_SHAPE[0] * OUTPUT_SHAPE[1] * OUTPUT_SHAPE[2], 0.0f);
+  const auto poses =
+    postprocess::rollout_controls(postprocess::denormalize_prediction(controls), 5.0, 0.0, 2.75);
+  ASSERT_EQ(poses.size(), static_cast<size_t>(OUTPUT_T * POSE_DIM));
+  // Straight at 5 m/s on the 0.1 s grid: the last point is 40 m ahead.
+  EXPECT_NEAR(poses[(OUTPUT_T - 1) * POSE_DIM], 0.5 * OUTPUT_T, 1e-3);
+  EXPECT_NEAR(poses[(OUTPUT_T - 1) * POSE_DIM + 1], 0.0, 1e-6);
 
-  std::vector<int64_t> shape{batch_size, agent_size, rows, cols};
-  Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
-  rclcpp::Time stamp(123, 0);
-
-  auto expected_points = prediction_shape[2];
-  const auto agent_poses = postprocess::parse_predictions(data, transform);
+  const auto ego_poses_batch = postprocess::parse_predictions(poses, Eigen::Matrix4d::Identity());
   geometry_msgs::msg::Point base_position;
-  auto traj = postprocess::create_ego_trajectory(agent_poses, stamp, base_position, 0);
-  ASSERT_EQ(traj.points.size(), expected_points);
+  const auto traj =
+    postprocess::create_ego_trajectory(ego_poses_batch, rclcpp::Time(123, 0), base_position, 0);
+  ASSERT_EQ(traj.points.size(), static_cast<size_t>(OUTPUT_T));
+  EXPECT_NEAR(traj.points.back().longitudinal_velocity_mps, 5.0F, 1e-3F);
+}
+
+TEST(PostprocessingUtilsTest, RolloutControlsTurnsWithSteeringRate)
+{
+  // A positive steering rate turns left: denormalized 0.3 rad/s.
+  std::vector<float> controls(OUTPUT_T * CONTROL_DIM, 0.0f);
+  for (int64_t t = 0; t < OUTPUT_T; ++t) controls[t * CONTROL_DIM + 1] = 1.0f;
+  const auto poses =
+    postprocess::rollout_controls(postprocess::denormalize_prediction(controls), 5.0, 0.0, 2.75);
+  EXPECT_GT(poses[(OUTPUT_T - 1) * POSE_DIM + 1], 1.0F);
 }
 
 TEST(PostprocessingUtilsTest, FixStopPointsAfterConfiguredDecelerationDuration)
@@ -102,7 +109,7 @@ TEST(PostprocessingUtilsTest, FixStopPointsResetsDecelerationDuration)
 namespace
 {
 // Ego poses on the model output grid, laid out along +x at the given positions.
-std::vector<std::vector<std::vector<Eigen::Matrix4d>>> make_ego_poses_along_x(
+std::vector<std::vector<Eigen::Matrix4d>> make_ego_poses_along_x(
   const std::vector<double> & positions_x)
 {
   std::vector<Eigen::Matrix4d> ego_poses;
@@ -111,18 +118,18 @@ std::vector<std::vector<std::vector<Eigen::Matrix4d>>> make_ego_poses_along_x(
     pose(0, 3) = x;
     ego_poses.push_back(pose);
   }
-  return {{ego_poses}};
+  return {ego_poses};
 }
 }  // namespace
 
 TEST(PostprocessingUtilsTest, CreateEgoTrajectoryConstantSpeed)
 {
   // Points 1 m apart on the 0.1 s grid, the first one 1 m ahead of the ego position: 10 m/s.
-  const auto agent_poses = make_ego_poses_along_x({1.0, 2.0, 3.0, 4.0, 5.0});
+  const auto ego_poses_batch = make_ego_poses_along_x({1.0, 2.0, 3.0, 4.0, 5.0});
   geometry_msgs::msg::Point base_position;
 
   const auto trajectory =
-    postprocess::create_ego_trajectory(agent_poses, rclcpp::Time(0), base_position, 0);
+    postprocess::create_ego_trajectory(ego_poses_batch, rclcpp::Time(0), base_position, 0);
 
   ASSERT_EQ(trajectory.points.size(), 5U);
   for (const auto & point : trajectory.points) {
@@ -137,11 +144,11 @@ TEST(PostprocessingUtilsTest, CreateEgoTrajectoryConstantSpeed)
 TEST(PostprocessingUtilsTest, CreateEgoTrajectoryAcceleration)
 {
   // Steps of 0.1, 0.2, 0.3 m on the 0.1 s grid: 1, 2, 3 m/s, i.e. 10 m/s^2.
-  const auto agent_poses = make_ego_poses_along_x({0.1, 0.3, 0.6});
+  const auto ego_poses_batch = make_ego_poses_along_x({0.1, 0.3, 0.6});
   geometry_msgs::msg::Point base_position;
 
   const auto trajectory =
-    postprocess::create_ego_trajectory(agent_poses, rclcpp::Time(0), base_position, 0);
+    postprocess::create_ego_trajectory(ego_poses_batch, rclcpp::Time(0), base_position, 0);
 
   ASSERT_EQ(trajectory.points.size(), 3U);
   EXPECT_NEAR(trajectory.points[0].longitudinal_velocity_mps, 1.0F, 1e-3F);
@@ -156,12 +163,12 @@ TEST(PostprocessingUtilsTest, CreateEgoTrajectoryAcceleration)
 TEST(PostprocessingUtilsTest, CreateEgoTrajectoryUsesEgoPositionForTheFirstPoint)
 {
   // Same poses, ego already at x = 1: the first point no longer covers any distance.
-  const auto agent_poses = make_ego_poses_along_x({1.0, 2.0});
+  const auto ego_poses_batch = make_ego_poses_along_x({1.0, 2.0});
   geometry_msgs::msg::Point base_position;
   base_position.x = 1.0;
 
   const auto trajectory =
-    postprocess::create_ego_trajectory(agent_poses, rclcpp::Time(0), base_position, 0);
+    postprocess::create_ego_trajectory(ego_poses_batch, rclcpp::Time(0), base_position, 0);
 
   ASSERT_EQ(trajectory.points.size(), 2U);
   EXPECT_NEAR(trajectory.points[0].longitudinal_velocity_mps, 0.0F, 1e-3F);

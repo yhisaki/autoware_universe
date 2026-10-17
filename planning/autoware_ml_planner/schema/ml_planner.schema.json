@@ -79,15 +79,6 @@
           "maximum": 2,
           "description": "Batch size for multi-batch inference"
         },
-        "noise_scale": {
-          "type": "array",
-          "items": {
-            "type": "number",
-            "minimum": 0
-          },
-          "default": [1.0],
-          "description": "Initial Gaussian noise scale for each batch item. Its length must equal batch_size."
-        },
         "trajectory_optimization": {
           "type": "object",
           "properties": {
@@ -397,7 +388,6 @@
         "planning_frequency_hz",
         "traffic_light_group_msg_timeout_seconds",
         "batch_size",
-        "noise_scale",
         "planning_factor",
         "debug_params"
       ]

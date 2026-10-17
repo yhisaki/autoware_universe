@@ -50,7 +50,6 @@ set(ML_PLANNER_SOURCES
   src/preprocessing/items/ego_history.cpp
   src/preprocessing/items/ego_shape.cpp
   src/preprocessing/items/goal_pose.cpp
-  src/preprocessing/items/initial_noise.cpp
   src/preprocessing/items/map.cpp
   src/preprocessing/items/traffic_signals.cpp
   src/preprocessing/items/turn_indicators.cpp
@@ -143,7 +142,6 @@ if(BUILD_TESTING)
     test/object_remap_test.cpp
     test/planning_factor_utils_test.cpp
     test/postprocessing_utils_test.cpp
-    test/postprocessing_utils_edge_case_test.cpp
     test/road_border_avoidance_test.cpp
     test/road_border_split_test.cpp
     test/route_segment_selection_test.cpp

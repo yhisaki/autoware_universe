@@ -22,8 +22,6 @@
 #include <rclcpp/duration.hpp>
 #include <rclcpp/time.hpp>
 
-#include <autoware_perception_msgs/msg/detail/predicted_objects__struct.hpp>
-
 #include <Eigen/src/Core/Matrix.h>
 
 #include <algorithm>
@@ -38,7 +36,6 @@
 
 namespace autoware::ml_planner::postprocess
 {
-using autoware_perception_msgs::msg::PredictedObject;
 using autoware_planning_msgs::msg::TrajectoryPoint;
 
 // internal functions
@@ -66,160 +63,118 @@ Trajectory get_trajectory_from_poses(
 
 std::vector<float> denormalize_prediction(const std::vector<float> & prediction)
 {
-  const size_t trajectory_size = static_cast<size_t>(MAX_NUM_AGENTS) * OUTPUT_T * POSE_DIM;
-  if (prediction.empty() || prediction.size() % trajectory_size != 0) {
-    throw std::runtime_error("Unsupported prediction shape for trajectory denormalization.");
+  const size_t control_size = static_cast<size_t>(OUTPUT_T) * CONTROL_DIM;
+  if (prediction.empty() || prediction.size() % control_size != 0) {
+    throw std::runtime_error("Unsupported prediction shape for control denormalization.");
   }
 
   std::vector<float> denormalized = prediction;
-  for (size_t index = 0; index < denormalized.size(); index += POSE_DIM) {
-    denormalized[index] *= POSITION_SCALE;
-    denormalized[index + 1] *= POSITION_SCALE;
-    const float norm = std::hypot(denormalized[index + 2], denormalized[index + 3]);
-    const float safe_norm = std::max(norm, 1.0e-6F);
-    denormalized[index + 2] /= safe_norm;
-    denormalized[index + 3] /= safe_norm;
+  for (size_t index = 0; index < denormalized.size(); index += CONTROL_DIM) {
+    denormalized[index] *= ACCELERATION_SCALE;
+    denormalized[index + 1] *= STEERING_RATE_SCALE;
   }
-
   return denormalized;
 }
 
-std::vector<std::vector<std::vector<Eigen::Matrix4d>>> parse_predictions(
+std::vector<float> rollout_controls(
+  const std::vector<float> & controls, const double initial_velocity, const double initial_steering,
+  const double wheel_base)
+{
+  const size_t control_size = static_cast<size_t>(OUTPUT_T) * CONTROL_DIM;
+  if (controls.empty() || controls.size() % control_size != 0) {
+    throw std::runtime_error("Unsupported control shape for rollout.");
+  }
+  if (wheel_base <= 0.0) {
+    throw std::invalid_argument("wheel_base must be positive");
+  }
+
+  const size_t batch_size = controls.size() / control_size;
+  std::vector<float> poses(batch_size * OUTPUT_T * POSE_DIM);
+  for (size_t batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
+    // Forward Euler from the ego origin, clipping velocity and steering after every step, as
+    // in the iLQR that produced the training labels.
+    double x = 0.0;
+    double y = 0.0;
+    double yaw = 0.0;
+    double velocity = std::clamp(initial_velocity, MIN_VELOCITY_MPS, MAX_VELOCITY_MPS);
+    double steering = std::clamp(initial_steering, -STEERING_LIMIT_RAD, STEERING_LIMIT_RAD);
+    for (int64_t time_idx = 0; time_idx < OUTPUT_T; ++time_idx) {
+      const size_t control_idx = (batch_idx * OUTPUT_T + time_idx) * CONTROL_DIM;
+      const double acceleration = controls[control_idx];
+      const double steering_rate = controls[control_idx + 1];
+      x += velocity * std::cos(yaw) * CONTROL_TIME_STEP_S;
+      y += velocity * std::sin(yaw) * CONTROL_TIME_STEP_S;
+      yaw += velocity * std::tan(steering) * CONTROL_TIME_STEP_S / wheel_base;
+      velocity = std::clamp(
+        velocity + acceleration * CONTROL_TIME_STEP_S, MIN_VELOCITY_MPS, MAX_VELOCITY_MPS);
+      steering = std::clamp(
+        steering + steering_rate * CONTROL_TIME_STEP_S, -STEERING_LIMIT_RAD, STEERING_LIMIT_RAD);
+
+      const size_t pose_idx = (batch_idx * OUTPUT_T + time_idx) * POSE_DIM;
+      poses[pose_idx] = static_cast<float>(x);
+      poses[pose_idx + 1] = static_cast<float>(y);
+      poses[pose_idx + 2] = static_cast<float>(std::cos(yaw));
+      poses[pose_idx + 3] = static_cast<float>(std::sin(yaw));
+    }
+  }
+  return poses;
+}
+
+std::vector<std::vector<Eigen::Matrix4d>> parse_predictions(
   const std::vector<float> & prediction, const Eigen::Matrix4d & transform_ego_to_map)
 {
-  const int64_t batch_size = prediction.size() / (MAX_NUM_AGENTS * OUTPUT_T * POSE_DIM);
+  const int64_t batch_size = prediction.size() / (OUTPUT_T * POSE_DIM);
 
   // Ensure prediction has enough data
-  const size_t required_size = batch_size * MAX_NUM_AGENTS * OUTPUT_T * POSE_DIM;
+  const size_t required_size = batch_size * OUTPUT_T * POSE_DIM;
   if (prediction.size() < required_size) {
     throw std::runtime_error(
       "Prediction vector size (" + std::to_string(prediction.size()) +
       ") is smaller than required (" + std::to_string(required_size) + ")");
   }
 
-  // Structure: batch -> agent -> timestep -> pose
-  std::vector<std::vector<std::vector<Eigen::Matrix4d>>> parsed_predictions(
-    batch_size,
-    std::vector<std::vector<Eigen::Matrix4d>>(
-      MAX_NUM_AGENTS, std::vector<Eigen::Matrix4d>(OUTPUT_T, Eigen::Matrix4d::Identity())));
+  // Structure: batch -> timestep -> pose
+  std::vector<std::vector<Eigen::Matrix4d>> parsed_predictions(
+    batch_size, std::vector<Eigen::Matrix4d>(OUTPUT_T, Eigen::Matrix4d::Identity()));
 
   for (int64_t batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
-    for (int64_t agent_idx = 0; agent_idx < MAX_NUM_AGENTS; ++agent_idx) {
-      for (int64_t time_idx = 0; time_idx < OUTPUT_T; ++time_idx) {
-        const int64_t pred_base_idx =
-          (batch_idx * MAX_NUM_AGENTS * OUTPUT_T + agent_idx * OUTPUT_T + time_idx) * POSE_DIM;
+    for (int64_t time_idx = 0; time_idx < OUTPUT_T; ++time_idx) {
+      const int64_t pred_base_idx = (batch_idx * OUTPUT_T + time_idx) * POSE_DIM;
 
-        const double x = static_cast<double>(prediction[pred_base_idx + 0]);
-        const double y = static_cast<double>(prediction[pred_base_idx + 1]);
-        const double cos_yaw = static_cast<double>(prediction[pred_base_idx + 2]);
-        const double sin_yaw = static_cast<double>(prediction[pred_base_idx + 3]);
+      const double x = static_cast<double>(prediction[pred_base_idx + 0]);
+      const double y = static_cast<double>(prediction[pred_base_idx + 1]);
+      const double cos_yaw = static_cast<double>(prediction[pred_base_idx + 2]);
+      const double sin_yaw = static_cast<double>(prediction[pred_base_idx + 3]);
 
-        // Create 4x4 transformation matrix from x, y, cos(yaw), sin(yaw)
-        Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
-        pose(0, 0) = cos_yaw;
-        pose(0, 1) = -sin_yaw;
-        pose(1, 0) = sin_yaw;
-        pose(1, 1) = cos_yaw;
-        pose(0, 3) = x;
-        pose(1, 3) = y;
+      // Create 4x4 transformation matrix from x, y, cos(yaw), sin(yaw)
+      Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
+      pose(0, 0) = cos_yaw;
+      pose(0, 1) = -sin_yaw;
+      pose(1, 0) = sin_yaw;
+      pose(1, 1) = cos_yaw;
+      pose(0, 3) = x;
+      pose(1, 3) = y;
 
-        parsed_predictions[batch_idx][agent_idx][time_idx] = transform_ego_to_map * pose;
-      }
+      parsed_predictions[batch_idx][time_idx] = transform_ego_to_map * pose;
     }
   }
 
   return parsed_predictions;
 }
 
-PredictedObjects create_predicted_objects(
-  const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const std::vector<SelectedAgent> & selected_agents, const rclcpp::Time & stamp,
-  const int64_t batch_index)
-{
-  auto trajectory_path_to_pose_path = [](const Trajectory & trajectory, const double object_z)
-    -> std::vector<geometry_msgs::msg::Pose> {
-    std::vector<geometry_msgs::msg::Pose> pose_path;
-    std::for_each(trajectory.points.begin(), trajectory.points.end(), [&](const auto & p) {
-      auto object_pose = p.pose;
-      object_pose.position.z = object_z;  // Set the z coordinate to the object's z
-      pose_path.push_back(object_pose);
-    });
-
-    return pose_path;
-  };
-
-  PredictedObjects predicted_objects;
-  predicted_objects.header.stamp = stamp;
-  predicted_objects.header.frame_id = "map";
-
-  constexpr double time_step{0.1};
-
-  // selected_agents contains current neighbor information ordered by distance.
-  for (int64_t neighbor_id = 0; neighbor_id < MAX_NUM_NEIGHBORS; ++neighbor_id) {
-    if (static_cast<size_t>(neighbor_id) >= selected_agents.size()) {
-      break;
-    }
-
-    // Extract poses for this neighbor (neighbor_id + 1 because 0 is ego)
-    const auto & neighbor_poses = agent_poses[batch_index][neighbor_id + 1];
-
-    PredictedObject object;
-    const TrackedObject & object_info = selected_agents.at(neighbor_id).current_object;
-
-    const auto & base_position = object_info.kinematics.pose_with_covariance.pose.position;
-    const Trajectory trajectory_points_in_map_reference = get_trajectory_from_poses(
-      neighbor_poses, base_position.x, base_position.y, base_position.z, stamp);
-
-    {  // Extract path from prediction
-      PredictedPath predicted_path;
-      const double object_pose_z = object_info.kinematics.pose_with_covariance.pose.position.z;
-
-      predicted_path.path =
-        trajectory_path_to_pose_path(trajectory_points_in_map_reference, object_pose_z);
-      predicted_path.time_step = rclcpp::Duration::from_seconds(time_step);
-      predicted_path.confidence = 1.0;
-      object.kinematics.predicted_paths.push_back(predicted_path);
-    }
-    {  // Copy kinematics
-      object.kinematics.initial_twist_with_covariance =
-        object_info.kinematics.twist_with_covariance;
-      object.kinematics.initial_acceleration_with_covariance =
-        object_info.kinematics.acceleration_with_covariance;
-      object.kinematics.initial_pose_with_covariance = object_info.kinematics.pose_with_covariance;
-    }
-    {  // Copy the remaining info
-      object.object_id = object_info.object_id;
-      object.classification = object_info.classification;
-      object.shape = object_info.shape;
-      object.existence_probability = object_info.existence_probability;
-    }
-    predicted_objects.objects.push_back(object);
-  }
-  return predicted_objects;
-}
-
 Trajectory create_ego_trajectory(
-  const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position,
-  const int64_t batch_index)
+  const std::vector<std::vector<Eigen::Matrix4d>> & ego_poses, const rclcpp::Time & stamp,
+  const geometry_msgs::msg::Point & base_position, const int64_t batch_index)
 {
-  const int64_t ego_index = 0;
-
   // Validate batch index
-  if (batch_index < 0 || batch_index >= static_cast<int64_t>(agent_poses.size())) {
+  if (batch_index < 0 || batch_index >= static_cast<int64_t>(ego_poses.size())) {
     throw std::out_of_range(
       "Invalid batch_index: " + std::to_string(batch_index) +
-      ", batch_size=" + std::to_string(agent_poses.size()));
+      ", batch_size=" + std::to_string(ego_poses.size()));
   }
 
-  // Extract ego poses (ego_index = 0)
-  const auto & ego_poses = agent_poses[batch_index][ego_index];
-
-  const double base_x = base_position.x;
-  const double base_y = base_position.y;
-  const double base_z = base_position.z;
-
-  return get_trajectory_from_poses(ego_poses, base_x, base_y, base_z, stamp);
+  return get_trajectory_from_poses(
+    ego_poses[batch_index], base_position.x, base_position.y, base_position.z, stamp);
 }
 
 int64_t count_valid_elements(

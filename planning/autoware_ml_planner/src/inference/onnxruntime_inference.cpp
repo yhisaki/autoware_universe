@@ -68,7 +68,6 @@ std::vector<int64_t> batched_shape(const std::array<int64_t, N> & shape, const s
 
 std::vector<int64_t> input_shape(const std::string & name, const size_t size)
 {
-  if (name == "initial_noise") return batched_shape(INITIAL_NOISE_SHAPE, size);
   if (name == "ego_agent_past") return batched_shape(EGO_HISTORY_SHAPE, size);
   if (name == "neighbor_agents_past") return batched_shape(NEIGHBOR_SHAPE, size);
   if (name == "agent_shape") return batched_shape(AGENT_SHAPE_SHAPE, size);
@@ -106,7 +105,6 @@ std::unordered_map<std::string, std::vector<float>> make_inputs(
   const preprocess::TensorMap & input_data_map)
 {
   static const std::vector<std::string> names = {
-    "initial_noise",
     "ego_agent_past",
     "neighbor_agents_past",
     "agent_shape",
@@ -203,9 +201,9 @@ InferenceResult OnnxruntimeSingleStepInference::infer(const preprocess::TensorMa
 {
   const auto start = std::chrono::steady_clock::now();
   try {
-    auto outputs = model_.run(make_inputs(input_data_map), {"trajectory", "turn_indicator_logits"});
+    auto outputs = model_.run(make_inputs(input_data_map), {"control", "turn_indicator_logits"});
     InferenceOutput output;
-    output.trajectory = std::move(outputs.at("trajectory"));
+    output.control = std::move(outputs.at("control"));
     output.turn_indicator_logits = std::move(outputs.at("turn_indicator_logits"));
     output.inference_time_ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

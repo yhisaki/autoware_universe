@@ -27,7 +27,7 @@ namespace autoware::ml_planner
 
 struct InferenceOutput
 {
-  std::vector<float> trajectory;
+  std::vector<float> control;
   std::vector<float> turn_indicator_logits;
   double inference_time_ms{0.0};
   bool is_denormalized{false};

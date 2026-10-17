@@ -18,7 +18,6 @@
 #include "autoware/ml_planner/dimensions.hpp"
 #include "autoware/ml_planner/inference/single_step_inference.hpp"
 #include "autoware/ml_planner/postprocessing/postprocessing_utils.hpp"
-#include "autoware/ml_planner/preprocessing/items/initial_noise.hpp"
 #include "autoware/ml_planner/utils/utils.hpp"
 
 #ifdef AUTOWARE_ML_PLANNER_USE_ONNXRUNTIME
@@ -123,11 +122,8 @@ std::string onnxruntime_execution_provider_from_backend(const std::string & back
 MLPlannerCore::MLPlannerCore(const MLPlannerParams & params, const VehicleInfo & vehicle_info)
 : params_(params), vehicle_info_(vehicle_info), vehicle_spec_(vehicle_info)
 {
-  if (
-    params_.batch_size < 1 || params_.batch_size > 2 ||
-    params_.noise_scale_list.size() != static_cast<size_t>(params_.batch_size)) {
-    throw std::invalid_argument(
-      "batch_size must be 1 or 2 and noise_scale must contain exactly batch_size values");
+  if (params_.batch_size < 1 || params_.batch_size > 2) {
+    throw std::invalid_argument("batch_size must be 1 or 2");
   }
 #ifdef AUTOWARE_ML_PLANNER_USE_ACADOS
   if (params_.trajectory_optimization.enable) {
@@ -173,11 +169,8 @@ void MLPlannerCore::load_model()
 
 void MLPlannerCore::update_params(const MLPlannerParams & params)
 {
-  if (
-    params.batch_size < 1 || params.batch_size > 2 ||
-    params.noise_scale_list.size() != static_cast<size_t>(params.batch_size)) {
-    throw std::invalid_argument(
-      "batch_size must be 1 or 2 and noise_scale must contain exactly batch_size values");
+  if (params.batch_size < 1 || params.batch_size > 2) {
+    throw std::invalid_argument("batch_size must be 1 or 2");
   }
 #ifdef AUTOWARE_ML_PLANNER_USE_ACADOS
   const bool rebuild_optimizer =
@@ -300,7 +293,6 @@ MLPlannerCore::BufferUpdateResult MLPlannerCore::update_buffer(
 preprocess::TensorMapResult MLPlannerCore::create_input_data(
   const preprocess::FrameInputs & frame_inputs)
 {
-  selected_agents_.clear();
   if (!lane_segment_context_) {
     return tl::unexpected(std::string{"Map context is unavailable"});
   }
@@ -313,31 +305,19 @@ preprocess::TensorMapResult MLPlannerCore::create_input_data(
     return tl::unexpected(single_input_result.error());
   }
   auto builder_output = std::move(single_input_result.value());
-  selected_agents_ = std::move(builder_output.selected_agents);
   TensorMap single_input_data_map = std::move(builder_output.tensors);
+
+  // The control rollout starts from the same current state the model sees.
+  const auto & ego_agent_past = single_input_data_map.at("ego_agent_past");
+  const size_t current_offset = static_cast<size_t>(INPUT_T) * EGO_HISTORY_DIM;
+  initial_velocity_ = ego_agent_past.data()[current_offset + EGO_AGENT_PAST_IDX_VELOCITY];
+  initial_steering_ = ego_agent_past.data()[current_offset + EGO_AGENT_PAST_IDX_STEERING];
 
   // Replicate for batch
   TensorMap input_data_map;
   for (auto & [key, value] : single_input_data_map) {
     input_data_map[key] = utils::replicate_for_batch(value, params_.batch_size);
   }
-
-  // Initial Gaussian noise for the sampler embedded in the ONNX graph.
-  std::vector<size_t> sampled_shape;
-  std::transform(
-    INITIAL_NOISE_SHAPE.begin(), INITIAL_NOISE_SHAPE.end(), std::back_inserter(sampled_shape),
-    [](const int64_t dim) { return static_cast<size_t>(dim); });
-  sampled_shape.front() = static_cast<size_t>(params_.batch_size);
-  xt::xarray<float> sampled_tensor = xt::xarray<float>::from_shape(sampled_shape);
-  const size_t single_sample_size = sampled_tensor.size() / sampled_shape.front();
-  for (int64_t b = 0; b < params_.batch_size; b++) {
-    const xt::xarray<float> initial_noise =
-      preprocess::create_initial_noise(params_.noise_scale_list[b]);
-    std::copy(
-      initial_noise.begin(), initial_noise.end(),
-      sampled_tensor.begin() + static_cast<std::ptrdiff_t>(b * single_sample_size));
-  }
-  input_data_map["initial_noise"] = std::move(sampled_tensor);
 
   return input_data_map;
 }
@@ -363,7 +343,7 @@ PlannerOutput MLPlannerCore::create_planner_output(
   const Odometry & kinematic_state = ego_history_.back();
   const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(kinematic_state.pose.pose);
 
-  const auto & raw_predictions = inference_output.trajectory;
+  const auto & raw_predictions = inference_output.control;
   const auto & turn_indicator_logits = inference_output.turn_indicator_logits;
   const auto expected_logits_size =
     static_cast<size_t>(params_.batch_size * TURN_INDICATOR_OUTPUT_DIM);
@@ -372,18 +352,19 @@ PlannerOutput MLPlannerCore::create_planner_output(
       "turn_indicator_logits size mismatch: expected " + std::to_string(expected_logits_size) +
       ", got " + std::to_string(turn_indicator_logits.size()));
   }
-  const std::vector<float> denormalized_predictions =
+  const std::vector<float> denormalized_controls =
     inference_output.is_denormalized ? raw_predictions
                                      : postprocess::denormalize_prediction(raw_predictions);
+  const std::vector<float> ego_frame_poses = postprocess::rollout_controls(
+    denormalized_controls, initial_velocity_, initial_steering_, vehicle_info_.wheel_base_m);
 
-  const auto agent_poses =
-    postprocess::parse_predictions(denormalized_predictions, ego_to_map_transform);
+  const auto ego_poses = postprocess::parse_predictions(ego_frame_poses, ego_to_map_transform);
 
   PlannerOutput output;
   // Trajectory and CandidateTrajectories
   for (int i = 0; i < params_.batch_size; i++) {
     auto trajectory = postprocess::create_ego_trajectory(
-      agent_poses, timestamp, kinematic_state.pose.pose.position, i);
+      ego_poses, timestamp, kinematic_state.pose.pose.position, i);
 
     if (i == 0) {
       // Keep the untouched model output for the debug topics.
@@ -486,12 +467,6 @@ PlannerOutput MLPlannerCore::create_planner_output(
     output.candidate_trajectories.candidate_trajectories.push_back(candidate_trajectory);
     output.candidate_trajectories.generator_info.push_back(generator_info);
   }
-
-  // PredictedObjects
-  // Use the first prediction as the main predicted objects
-  constexpr int64_t batch_idx = 0;
-  output.predicted_objects =
-    postprocess::create_predicted_objects(agent_poses, selected_agents_, timestamp, batch_idx);
 
   return output;
 }

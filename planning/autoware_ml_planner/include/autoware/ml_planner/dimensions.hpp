@@ -69,9 +69,10 @@ inline constexpr int64_t INPUT_T_WITH_CURRENT = INPUT_T + 1;  // Including curre
 // Time window of raw message history buffers: the 31-step 0.1 s input grid
 // span plus a margin for the bracketing message and stamp jitter.
 inline constexpr double HISTORY_WINDOW_S = 0.1 * static_cast<double>(INPUT_T_WITH_CURRENT) + 0.5;
-inline constexpr int64_t OUTPUT_T = 80;  // Output timestamp number
-inline constexpr int64_t POSE_DIM = 4;   // x, y, cos(yaw), sin(yaw)
-inline constexpr std::array<int64_t, 4> OUTPUT_SHAPE = {1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
+inline constexpr int64_t OUTPUT_T = 80;    // Output timestamp number
+inline constexpr int64_t POSE_DIM = 4;     // x, y, cos(yaw), sin(yaw)
+inline constexpr int64_t CONTROL_DIM = 2;  // acceleration, steering rate
+inline constexpr std::array<int64_t, 3> OUTPUT_SHAPE = {1, OUTPUT_T, CONTROL_DIM};
 
 inline constexpr int64_t TURN_INDICATOR_OUTPUT_DISABLE = 0;
 inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_LEFT = 1;
@@ -79,8 +80,6 @@ inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_RIGHT = 2;
 inline constexpr int64_t TURN_INDICATOR_OUTPUT_DIM = 3;
 inline constexpr std::array<int64_t, 2> TURN_INDICATOR_LOGIT_SHAPE = {1, TURN_INDICATOR_OUTPUT_DIM};
 
-inline constexpr std::array<int64_t, 4> INITIAL_NOISE_SHAPE = {
-  1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
 inline constexpr std::array<int64_t, 3> EGO_HISTORY_SHAPE = {1, INPUT_T + 1, EGO_HISTORY_DIM};
 inline constexpr std::array<int64_t, 4> NEIGHBOR_SHAPE = {
   1, MAX_NUM_NEIGHBORS, INPUT_T + 1, POSE_DIM};
@@ -122,5 +121,14 @@ inline constexpr std::array<int64_t, 4> ROUTE_TRAFFIC_LIGHT_FUTURE_SHAPE = {
 inline constexpr float POSITION_SCALE = 50.0F;
 inline constexpr float SPEED_SCALE = 15.0F;
 inline constexpr float VEHICLE_SHAPE_SCALE = 10.0F;
+inline constexpr float ACCELERATION_SCALE = 4.0F;
+inline constexpr float STEERING_RATE_SCALE = 0.3F;
+
+// Kinematic-bicycle model used to label and roll out the controls; must match
+// diffusion_planner.data.dimensions.
+inline constexpr double CONTROL_TIME_STEP_S = 0.1;
+inline constexpr double MIN_VELOCITY_MPS = 0.0;
+inline constexpr double MAX_VELOCITY_MPS = 30.0;
+inline constexpr double STEERING_LIMIT_RAD = 0.7;
 }  // namespace autoware::ml_planner
 #endif  // AUTOWARE__ML_PLANNER__DIMENSIONS_HPP_

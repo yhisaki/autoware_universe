@@ -38,7 +38,6 @@ SingleStepInference::SingleStepInference(
   const auto allocate = [this](const auto & shape) {
     return static_cast<size_t>(batch_size_) * num_elements_without_batch(shape);
   };
-  initial_noise_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(INITIAL_NOISE_SHAPE));
   ego_history_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(EGO_HISTORY_SHAPE));
   neighbor_agents_past_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(NEIGHBOR_SHAPE));
   agent_shape_d_ = autoware::cuda_utils::make_unique<float[]>(allocate(AGENT_SHAPE_SHAPE));
@@ -98,7 +97,6 @@ void SingleStepInference::load_engine(const std::string & model_path)
     network_io.emplace_back(name, dims);
   };
 
-  add_input("initial_noise", INITIAL_NOISE_SHAPE);
   add_input("ego_agent_past", EGO_HISTORY_SHAPE);
   add_input("neighbor_agents_past", NEIGHBOR_SHAPE);
   add_input("agent_shape", AGENT_SHAPE_SHAPE);
@@ -119,7 +117,7 @@ void SingleStepInference::load_engine(const std::string & model_path)
   add_input("goal_pose", GOAL_POSE_SHAPE);
   add_input("ego_shape", EGO_SHAPE_SHAPE);
   add_input("turn_indicators", TURN_INDICATORS_SHAPE);
-  network_io.emplace_back("trajectory", to_dynamic_dims(OUTPUT_SHAPE, batch_size_));
+  network_io.emplace_back("control", to_dynamic_dims(OUTPUT_SHAPE, batch_size_));
   network_io.emplace_back(
     "turn_indicator_logits", to_dynamic_dims(TURN_INDICATOR_LOGIT_SHAPE, batch_size_));
   network_trt_ptr_ =
@@ -133,7 +131,6 @@ void SingleStepInference::bind_buffers()
     network_trt_ptr_->setInputShape(name.c_str(), to_dims_with_batch(shape, batch_size_));
     network_trt_ptr_->setTensorAddress(name.c_str(), data);
   };
-  bind_input("initial_noise", INITIAL_NOISE_SHAPE, initial_noise_d_.get());
   bind_input("ego_agent_past", EGO_HISTORY_SHAPE, ego_history_d_.get());
   bind_input("neighbor_agents_past", NEIGHBOR_SHAPE, neighbor_agents_past_d_.get());
   bind_input("agent_shape", AGENT_SHAPE_SHAPE, agent_shape_d_.get());
@@ -161,7 +158,7 @@ void SingleStepInference::bind_buffers()
   bind_input("goal_pose", GOAL_POSE_SHAPE, goal_pose_d_.get());
   bind_input("ego_shape", EGO_SHAPE_SHAPE, ego_shape_d_.get());
   bind_input("turn_indicators", TURN_INDICATORS_SHAPE, turn_indicators_d_.get());
-  network_trt_ptr_->setTensorAddress("trajectory", output_d_.get());
+  network_trt_ptr_->setTensorAddress("control", output_d_.get());
   network_trt_ptr_->setTensorAddress("turn_indicator_logits", turn_indicator_logits_d_.get());
 }
 
@@ -170,7 +167,6 @@ void SingleStepInference::transfer_inputs_to_device(const preprocess::TensorMap 
   const auto transfer = [&](const std::string & name, auto & destination) {
     transfer_float_input(input_data_map.at(name), destination, stream_);
   };
-  transfer("initial_noise", initial_noise_d_);
   transfer("ego_agent_past", ego_history_d_);
   transfer("neighbor_agents_past", neighbor_agents_past_d_);
   transfer("agent_shape", agent_shape_d_);
@@ -210,7 +206,7 @@ InferenceResult SingleStepInference::infer(const preprocess::TensorMap & input_d
   CHECK_CUDA_ERROR(cudaStreamSynchronize(stream_));
 
   InferenceOutput output;
-  output.trajectory.assign(output_pinned_.get(), output_pinned_.get() + output_num_elements_);
+  output.control.assign(output_pinned_.get(), output_pinned_.get() + output_num_elements_);
   output.turn_indicator_logits.assign(
     turn_indicator_logits_pinned_.get(),
     turn_indicator_logits_pinned_.get() + turn_indicator_logits_num_elements_);

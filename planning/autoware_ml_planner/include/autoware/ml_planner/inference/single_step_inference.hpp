@@ -49,7 +49,6 @@ private:
   std::unique_ptr<autoware::tensorrt_common::TrtCommon> network_trt_ptr_{nullptr};
   CudaGraphExecutor network_cuda_graph_;
 
-  autoware::cuda_utils::CudaUniquePtr<float[]> initial_noise_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> ego_history_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> neighbor_agents_past_d_;
   autoware::cuda_utils::CudaUniquePtr<float[]> agent_shape_d_;

@@ -33,7 +33,6 @@
 #include <rclcpp/time.hpp>
 
 #include <autoware_internal_planning_msgs/msg/candidate_trajectories.hpp>
-#include <autoware_perception_msgs/msg/predicted_objects.hpp>
 #include <autoware_perception_msgs/msg/tracked_objects.hpp>
 #include <autoware_perception_msgs/msg/traffic_light_group.hpp>
 #include <autoware_planning_msgs/msg/lanelet_route.hpp>
@@ -55,12 +54,11 @@ namespace autoware::ml_planner
 
 using autoware::vehicle_info_utils::VehicleInfo;
 using autoware_internal_planning_msgs::msg::CandidateTrajectories;
-using autoware_perception_msgs::msg::PredictedObjects;
 using autoware_perception_msgs::msg::TrackedObjects;
 using autoware_planning_msgs::msg::LaneletRoute;
 using autoware_planning_msgs::msg::Trajectory;
-using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using autoware_vehicle_msgs::msg::SteeringReport;
+using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using autoware_vehicle_msgs::msg::TurnIndicatorsReport;
 using nav_msgs::msg::Odometry;
 using unique_identifier_msgs::msg::UUID;
@@ -93,7 +91,6 @@ struct PlannerOutput
   std::optional<Trajectory> trajectory;
   /// Candidates whose optimization succeeded. Empty when none did.
   CandidateTrajectories candidate_trajectories;
-  PredictedObjects predicted_objects;
   TurnIndicatorsCommand turn_indicators_command;
   std::optional<Trajectory> raw_trajectory;
   TrajectoryOptimizationDebug optimization_debug;
@@ -115,7 +112,6 @@ struct MLPlannerParams
   double planning_frequency_hz;
   double traffic_light_group_msg_timeout_seconds;
   int batch_size;
-  std::vector<double> noise_scale_list;
   optimization::TrajectoryOptimizationParams trajectory_optimization;
   postprocess::RoadBorderAvoidanceParams road_border_avoidance;
   postprocess::StopPointFixingParams stop_point_fixing;
@@ -285,7 +281,9 @@ private:
   std::unique_ptr<postprocess::RoadBorderAvoidance> road_border_avoidance_{nullptr};
 
   // Postprocessing
-  std::vector<preprocess::SelectedAgent> selected_agents_;
+  // Current ego velocity and steering from the last model input, where the control rollout starts.
+  double initial_velocity_{0.0};
+  double initial_steering_{0.0};
 
   // Raw message history buffers, bounded to the model input time window.
   // All derived history data is computed statelessly from these buffers.
