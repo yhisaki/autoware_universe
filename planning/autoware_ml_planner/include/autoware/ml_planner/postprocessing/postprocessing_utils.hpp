@@ -22,8 +22,6 @@
 #include <xtensor/xarray.hpp>
 
 #include <autoware_internal_planning_msgs/msg/candidate_trajectories.hpp>
-#include <autoware_perception_msgs/msg/predicted_object.hpp>
-#include <autoware_perception_msgs/msg/predicted_objects.hpp>
 #include <autoware_planning_msgs/msg/trajectory.hpp>
 #include <autoware_vehicle_msgs/msg/turn_indicators_command.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -37,59 +35,49 @@
 namespace autoware::ml_planner::postprocess
 {
 using autoware_internal_planning_msgs::msg::CandidateTrajectories;
-using autoware_perception_msgs::msg::ObjectClassification;
-using autoware_perception_msgs::msg::PredictedObjects;
-using autoware_perception_msgs::msg::PredictedPath;
 using autoware_planning_msgs::msg::Trajectory;
 using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
-using preprocess::SelectedAgent;
-using preprocess::TrackedObject;
 using unique_identifier_msgs::msg::UUID;
 
-/**
- * @brief Parses raw prediction data into structured pose matrices in map coordinates.
- *
- * @param prediction The raw tensor prediction output (x, y, cos(yaw), sin(yaw) for each timestep).
- * @param transform_ego_to_map The transformation matrix from ego to map coordinates.
- * @return A 3D vector structure: [batch][agent][timestep] -> Eigen::Matrix4d (4x4 pose matrix).
- */
-std::vector<std::vector<std::vector<Eigen::Matrix4d>>> parse_predictions(
-  const std::vector<float> & prediction, const Eigen::Matrix4d & transform_ego_to_map);
+/// One predicted ego state: the pose in map coordinates, velocity [m/s], and steering [rad].
+struct EgoState
+{
+  Eigen::Matrix4d pose{Eigen::Matrix4d::Identity()};
+  double velocity{0.0};
+  double steering{0.0};
+};
 
+/**
+ * @brief Restores normalized (x, y, cos(yaw), sin(yaw), velocity, steering) predictions to meters,
+ * unit yaw vectors, and m/s.
+ */
 std::vector<float> denormalize_prediction(const std::vector<float> & prediction);
 
 /**
- * @brief Creates PredictedObjects message from parsed agent poses.
+ * @brief Parses denormalized ego-frame state predictions into ego states in map coordinates.
  *
- * @param agent_poses The parsed agent poses [batch][agent][timestep] -> pose matrix.
- * @param selected_agents The currently visible agents ordered by distance from ego.
- * @param stamp The ROS time stamp for the message.
- * @param batch_index The batch index to use.
- * @return A PredictedObjects message containing predicted paths for each agent.
+ * @param prediction Denormalized states with shape (B, T, 6).
+ * @param transform_ego_to_map The transformation matrix from ego to map coordinates.
+ * @return A 2D vector structure: [batch][timestep] -> EgoState.
  */
-PredictedObjects create_predicted_objects(
-  const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const std::vector<SelectedAgent> & selected_agents, const rclcpp::Time & stamp,
-  const int64_t batch_index);
+std::vector<std::vector<EgoState>> parse_predictions(
+  const std::vector<float> & prediction, const Eigen::Matrix4d & transform_ego_to_map);
 
 /**
- * @brief Creates a Trajectory message from parsed agent poses for a specific batch and ego agent.
+ * @brief Creates a Trajectory message from parsed ego states for a specific batch.
  *
- * The velocity of each point is its distance to the previous point divided by the time step,
- * with the current ego position as the predecessor of the first point, and the acceleration is
- * the forward difference of that speed profile (0 on the last point). The model predicts poses
- * only, so the heading rate and steering angle are left at zero. When the trajectory
- * optimization is enabled it recomputes all of these consistently with the vehicle model.
+ * The velocity and front wheel angle are the predicted ones, and the acceleration is the forward
+ * difference of the velocity profile (0 on the last point). The heading rate is left at zero.
+ * When the trajectory optimization is enabled it recomputes all of these consistently with the
+ * vehicle model.
  *
- * @param agent_poses The parsed agent poses [batch][agent][timestep] -> pose matrix.
+ * @param ego_states The parsed ego states [batch][timestep].
  * @param stamp The ROS time stamp for the message.
- * @param base_position The current ego position in map coordinates.
  * @param batch_index The batch index to extract.
  * @return A Trajectory message for the ego agent in the specified batch.
  */
 Trajectory create_ego_trajectory(
-  const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
-  const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position,
+  const std::vector<std::vector<EgoState>> & ego_states, const rclcpp::Time & stamp,
   int64_t batch_index);
 
 /**

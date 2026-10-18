@@ -32,26 +32,30 @@ namespace autoware::ml_planner::test
 {
 using autoware_planning_msgs::msg::Trajectory;
 
-TEST(PostprocessingUtilsTest, CreateTrajectoryAndMultipleTrajectories)
+TEST(PostprocessingUtilsTest, CreateTrajectoryFromStatePrediction)
 {
-  constexpr auto prediction_shape = OUTPUT_SHAPE;
-  auto batch_size = prediction_shape[0];
-  auto agent_size = prediction_shape[1];
-  auto rows = prediction_shape[2];
-  auto cols = prediction_shape[3];
-  std::vector<float> data(batch_size * agent_size * rows * cols, 0.0f);
-  // Fill with some values for checking
-  for (size_t i = 0; i < data.size(); ++i) data[i] = static_cast<float>(i);
+  // Normalized states: x = t / 50 (1 m per step), unit heading, velocity 10 / 15, steering 0.1.
+  std::vector<float> prediction(OUTPUT_SHAPE[0] * OUTPUT_SHAPE[1] * OUTPUT_SHAPE[2], 0.0f);
+  for (int64_t t = 0; t < OUTPUT_T; ++t) {
+    float * state = prediction.data() + t * STATE_DIM;
+    state[0] = static_cast<float>(t + 1) / POSITION_SCALE;
+    state[2] = 2.0F;  // Not unit length: denormalization projects it onto the unit circle.
+    state[STATE_IDX_VELOCITY] = 10.0F / SPEED_SCALE;
+    state[STATE_IDX_STEERING] = 0.1F;
+  }
 
-  std::vector<int64_t> shape{batch_size, agent_size, rows, cols};
-  Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
-  rclcpp::Time stamp(123, 0);
+  const auto ego_states = postprocess::parse_predictions(
+    postprocess::denormalize_prediction(prediction), Eigen::Matrix4d::Identity());
+  ASSERT_EQ(ego_states.size(), 1U);
+  ASSERT_EQ(ego_states[0].size(), static_cast<size_t>(OUTPUT_T));
+  EXPECT_NEAR(ego_states[0].back().pose(0, 3), static_cast<double>(OUTPUT_T), 1e-3);
+  EXPECT_NEAR(ego_states[0].back().pose(0, 0), 1.0, 1e-6);
 
-  auto expected_points = prediction_shape[2];
-  const auto agent_poses = postprocess::parse_predictions(data, transform);
-  geometry_msgs::msg::Point base_position;
-  auto traj = postprocess::create_ego_trajectory(agent_poses, stamp, base_position, 0);
-  ASSERT_EQ(traj.points.size(), expected_points);
+  const auto traj = postprocess::create_ego_trajectory(ego_states, rclcpp::Time(123, 0), 0);
+  ASSERT_EQ(traj.points.size(), static_cast<size_t>(OUTPUT_T));
+  EXPECT_NEAR(traj.points.front().longitudinal_velocity_mps, 10.0F, 1e-4F);
+  EXPECT_NEAR(traj.points.front().front_wheel_angle_rad, 0.1F, 1e-6F);
+  EXPECT_NEAR(traj.points.front().acceleration_mps2, 0.0F, 1e-3F);
 }
 
 TEST(PostprocessingUtilsTest, FixStopPointsAfterConfiguredDecelerationDuration)
@@ -101,71 +105,49 @@ TEST(PostprocessingUtilsTest, FixStopPointsResetsDecelerationDuration)
 
 namespace
 {
-// Ego poses on the model output grid, laid out along +x at the given positions.
-std::vector<std::vector<std::vector<Eigen::Matrix4d>>> make_ego_poses_along_x(
-  const std::vector<double> & positions_x)
+// Ego states on the model output grid, laid out along +x with the given velocities.
+std::vector<std::vector<postprocess::EgoState>> make_ego_states_along_x(
+  const std::vector<double> & velocities)
 {
-  std::vector<Eigen::Matrix4d> ego_poses;
-  for (const double x : positions_x) {
-    Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
-    pose(0, 3) = x;
-    ego_poses.push_back(pose);
+  std::vector<postprocess::EgoState> ego_states;
+  double x = 0.0;
+  for (const double velocity : velocities) {
+    x += 0.1 * velocity;
+    postprocess::EgoState state;
+    state.pose(0, 3) = x;
+    state.velocity = velocity;
+    ego_states.push_back(state);
   }
-  return {{ego_poses}};
+  return {ego_states};
 }
 }  // namespace
 
-TEST(PostprocessingUtilsTest, CreateEgoTrajectoryConstantSpeed)
+TEST(PostprocessingUtilsTest, CreateEgoTrajectoryUsesPredictedVelocity)
 {
-  // Points 1 m apart on the 0.1 s grid, the first one 1 m ahead of the ego position: 10 m/s.
-  const auto agent_poses = make_ego_poses_along_x({1.0, 2.0, 3.0, 4.0, 5.0});
-  geometry_msgs::msg::Point base_position;
+  const auto ego_states = make_ego_states_along_x({10.0, 10.0, 10.0});
 
-  const auto trajectory =
-    postprocess::create_ego_trajectory(agent_poses, rclcpp::Time(0), base_position, 0);
+  const auto trajectory = postprocess::create_ego_trajectory(ego_states, rclcpp::Time(0), 0);
 
-  ASSERT_EQ(trajectory.points.size(), 5U);
+  ASSERT_EQ(trajectory.points.size(), 3U);
   for (const auto & point : trajectory.points) {
     EXPECT_NEAR(point.longitudinal_velocity_mps, 10.0F, 1e-3F);
     EXPECT_NEAR(point.acceleration_mps2, 0.0F, 1e-3F);
-    // The model predicts poses only.
     EXPECT_FLOAT_EQ(point.heading_rate_rps, 0.0F);
-    EXPECT_FLOAT_EQ(point.front_wheel_angle_rad, 0.0F);
   }
 }
 
 TEST(PostprocessingUtilsTest, CreateEgoTrajectoryAcceleration)
 {
-  // Steps of 0.1, 0.2, 0.3 m on the 0.1 s grid: 1, 2, 3 m/s, i.e. 10 m/s^2.
-  const auto agent_poses = make_ego_poses_along_x({0.1, 0.3, 0.6});
-  geometry_msgs::msg::Point base_position;
+  // 1, 2, 3 m/s on the 0.1 s grid: 10 m/s^2.
+  const auto ego_states = make_ego_states_along_x({1.0, 2.0, 3.0});
 
-  const auto trajectory =
-    postprocess::create_ego_trajectory(agent_poses, rclcpp::Time(0), base_position, 0);
+  const auto trajectory = postprocess::create_ego_trajectory(ego_states, rclcpp::Time(0), 0);
 
   ASSERT_EQ(trajectory.points.size(), 3U);
-  EXPECT_NEAR(trajectory.points[0].longitudinal_velocity_mps, 1.0F, 1e-3F);
-  EXPECT_NEAR(trajectory.points[1].longitudinal_velocity_mps, 2.0F, 1e-3F);
-  EXPECT_NEAR(trajectory.points[2].longitudinal_velocity_mps, 3.0F, 1e-3F);
   EXPECT_NEAR(trajectory.points[0].acceleration_mps2, 10.0F, 1e-2F);
   EXPECT_NEAR(trajectory.points[1].acceleration_mps2, 10.0F, 1e-2F);
   // The last point has no successor.
   EXPECT_FLOAT_EQ(trajectory.points[2].acceleration_mps2, 0.0F);
-}
-
-TEST(PostprocessingUtilsTest, CreateEgoTrajectoryUsesEgoPositionForTheFirstPoint)
-{
-  // Same poses, ego already at x = 1: the first point no longer covers any distance.
-  const auto agent_poses = make_ego_poses_along_x({1.0, 2.0});
-  geometry_msgs::msg::Point base_position;
-  base_position.x = 1.0;
-
-  const auto trajectory =
-    postprocess::create_ego_trajectory(agent_poses, rclcpp::Time(0), base_position, 0);
-
-  ASSERT_EQ(trajectory.points.size(), 2U);
-  EXPECT_NEAR(trajectory.points[0].longitudinal_velocity_mps, 0.0F, 1e-3F);
-  EXPECT_NEAR(trajectory.points[1].longitudinal_velocity_mps, 10.0F, 1e-3F);
 }
 
 }  // namespace autoware::ml_planner::test

@@ -300,7 +300,6 @@ MLPlannerCore::BufferUpdateResult MLPlannerCore::update_buffer(
 preprocess::TensorMapResult MLPlannerCore::create_input_data(
   const preprocess::FrameInputs & frame_inputs)
 {
-  selected_agents_.clear();
   if (!lane_segment_context_) {
     return tl::unexpected(std::string{"Map context is unavailable"});
   }
@@ -313,7 +312,6 @@ preprocess::TensorMapResult MLPlannerCore::create_input_data(
     return tl::unexpected(single_input_result.error());
   }
   auto builder_output = std::move(single_input_result.value());
-  selected_agents_ = std::move(builder_output.selected_agents);
   TensorMap single_input_data_map = std::move(builder_output.tensors);
 
   // Replicate for batch
@@ -376,14 +374,13 @@ PlannerOutput MLPlannerCore::create_planner_output(
     inference_output.is_denormalized ? raw_predictions
                                      : postprocess::denormalize_prediction(raw_predictions);
 
-  const auto agent_poses =
+  const auto ego_states =
     postprocess::parse_predictions(denormalized_predictions, ego_to_map_transform);
 
   PlannerOutput output;
   // Trajectory and CandidateTrajectories
   for (int i = 0; i < params_.batch_size; i++) {
-    auto trajectory = postprocess::create_ego_trajectory(
-      agent_poses, timestamp, kinematic_state.pose.pose.position, i);
+    auto trajectory = postprocess::create_ego_trajectory(ego_states, timestamp, i);
 
     if (i == 0) {
       // Keep the untouched model output for the debug topics.
@@ -486,12 +483,6 @@ PlannerOutput MLPlannerCore::create_planner_output(
     output.candidate_trajectories.candidate_trajectories.push_back(candidate_trajectory);
     output.candidate_trajectories.generator_info.push_back(generator_info);
   }
-
-  // PredictedObjects
-  // Use the first prediction as the main predicted objects
-  constexpr int64_t batch_idx = 0;
-  output.predicted_objects =
-    postprocess::create_predicted_objects(agent_poses, selected_agents_, timestamp, batch_idx);
 
   return output;
 }

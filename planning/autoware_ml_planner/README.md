@@ -43,7 +43,7 @@ ros2 launch autoware_launch planning_simulator.launch.xml \
 
 ## Features
 
-- **Diffusion-based trajectory generation** for flexible and robust planning
+- **Flow-matching ego state generation** (pose, velocity, and steering)
 
   [![Diffusion-Based trajectory generation](media/ml_planner.gif)](media/ml_planner.gif)
 
@@ -88,7 +88,7 @@ cd scripts
 
 Debug topics (published while the optimizer runs): `~/debug/optimization/raw_trajectory` (raw model output), `~/debug/optimization/solver_status`, `~/debug/optimization/solve_time_ms`. On solver failure the raw trajectory is published unchanged.
 
-The trajectory is created with a naive velocity profile derived from the predicted poses (as in `autoware_diffusion_planner`): the speed of each point is its distance to the previous point divided by the time step, with the current ego position as the predecessor of the first point, and the acceleration is the forward difference of that speed profile, with 0 on the last point. The heading rate and steering angle stay at zero, since the model predicts poses only. That profile is what gets published when `trajectory_optimization.enable` is false (or the build has no acados support); when the optimization runs, it replaces all of these with values consistent with the vehicle model.
+The trajectory uses the predicted velocity and steering angle (front wheel angle) of each point directly, and the acceleration is the forward difference of the predicted velocity profile, with 0 on the last point. The heading rate stays at zero. That profile is what gets published when `trajectory_optimization.enable` is false (or the build has no acados support); when the optimization runs, it replaces all of these with values consistent with the vehicle model.
 
 ### Road border avoidance
 
@@ -132,7 +132,6 @@ Parameters can be set via YAML (see `config/ml_planner.param.yaml`).
 | ------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------- |
 | `~/output/trajectory`           | autoware_planning_msgs/msg/Trajectory                     | Planned trajectory for the ego vehicle                     |
 | `~/output/trajectories`         | autoware_internal_planning_msgs/msg/CandidateTrajectories | Multiple candidate trajectories                            |
-| `~/output/predicted_objects`    | autoware_perception_msgs/msg/PredictedObjects             | Predicted future states of dynamic objects                 |
 | `~/output/turn_indicators`      | autoware_vehicle_msgs/msg/TurnIndicatorsCommand           | Planned turn indicator command                             |
 | `~/output/debug/traffic_signal` | autoware_perception_msgs/msg/TrafficLightGroup            | First traffic light on route (ego forward) for RViz/ad_api |
 | `~/debug/lane_marker`           | visualization_msgs/msg/MarkerArray                        | Lane debug markers                                         |

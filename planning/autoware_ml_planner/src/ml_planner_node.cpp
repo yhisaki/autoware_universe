@@ -59,8 +59,6 @@ MLPlanner::MLPlanner(const rclcpp::NodeOptions & options)
   // Initialize the node
   pub_trajectory_ = this->create_publisher<Trajectory>("~/output/trajectory", 1);
   pub_trajectories_ = this->create_publisher<CandidateTrajectories>("~/output/trajectories", 1);
-  pub_objects_ =
-    this->create_publisher<PredictedObjects>("~/output/predicted_objects", rclcpp::QoS(1));
   pub_route_marker_ = this->create_publisher<MarkerArray>("~/debug/route_marker", 10);
   pub_lane_marker_ = this->create_publisher<MarkerArray>("~/debug/lane_marker", 10);
   pub_linestring_marker_ = this->create_publisher<MarkerArray>("~/debug/linestring_marker", 10);
@@ -810,9 +808,8 @@ void MLPlanner::on_timer()
   if (!planner_output.candidate_trajectories.candidate_trajectories.empty()) {
     pub_trajectories_->publish(planner_output.candidate_trajectories);
   }
-  // Perception output and the turn indicator command do not come from the optimization, so
-  // they are published either way.
-  pub_objects_->publish(planner_output.predicted_objects);
+  // The turn indicator command does not come from the optimization, so it is published either
+  // way.
   pub_turn_indicators_->publish(planner_output.turn_indicators_command);
 
   const auto & avoidance_debug = planner_output.avoidance_debug;

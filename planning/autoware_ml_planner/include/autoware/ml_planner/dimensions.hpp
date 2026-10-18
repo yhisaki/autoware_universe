@@ -71,7 +71,12 @@ inline constexpr int64_t INPUT_T_WITH_CURRENT = INPUT_T + 1;  // Including curre
 inline constexpr double HISTORY_WINDOW_S = 0.1 * static_cast<double>(INPUT_T_WITH_CURRENT) + 0.5;
 inline constexpr int64_t OUTPUT_T = 80;  // Output timestamp number
 inline constexpr int64_t POSE_DIM = 4;   // x, y, cos(yaw), sin(yaw)
-inline constexpr std::array<int64_t, 4> OUTPUT_SHAPE = {1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
+// x, y, cos(yaw), sin(yaw), velocity, steering
+inline constexpr int64_t STATE_DIM = 6;
+inline constexpr int64_t STATE_IDX_VELOCITY = 4;
+inline constexpr int64_t STATE_IDX_STEERING = 5;
+inline constexpr std::array<int64_t, 3> OUTPUT_SHAPE = {1, OUTPUT_T, STATE_DIM};
+inline constexpr std::array<int64_t, 3> INITIAL_NOISE_SHAPE = {1, OUTPUT_T, STATE_DIM};
 
 inline constexpr int64_t TURN_INDICATOR_OUTPUT_DISABLE = 0;
 inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_LEFT = 1;
@@ -79,8 +84,6 @@ inline constexpr int64_t TURN_INDICATOR_OUTPUT_ENABLE_RIGHT = 2;
 inline constexpr int64_t TURN_INDICATOR_OUTPUT_DIM = 3;
 inline constexpr std::array<int64_t, 2> TURN_INDICATOR_LOGIT_SHAPE = {1, TURN_INDICATOR_OUTPUT_DIM};
 
-inline constexpr std::array<int64_t, 4> INITIAL_NOISE_SHAPE = {
-  1, MAX_NUM_AGENTS, OUTPUT_T, POSE_DIM};
 inline constexpr std::array<int64_t, 3> EGO_HISTORY_SHAPE = {1, INPUT_T + 1, EGO_HISTORY_DIM};
 inline constexpr std::array<int64_t, 4> NEIGHBOR_SHAPE = {
   1, MAX_NUM_NEIGHBORS, INPUT_T + 1, POSE_DIM};

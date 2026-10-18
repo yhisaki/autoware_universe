@@ -22,9 +22,8 @@ namespace autoware::ml_planner::preprocess
 {
 xt::xarray<float> create_initial_noise(const double noise_scale)
 {
-  xt::xarray<float> noise = xt::xarray<float>::from_shape(
-    {static_cast<size_t>(MAX_NUM_AGENTS), static_cast<size_t>(OUTPUT_T),
-     static_cast<size_t>(POSE_DIM)});
+  xt::xarray<float> noise =
+    xt::xarray<float>::from_shape({static_cast<size_t>(OUTPUT_T), static_cast<size_t>(STATE_DIM)});
   std::random_device random_device;
   std::mt19937 generator(random_device());
   std::normal_distribution<float> distribution(0.0F, 1.0F);
