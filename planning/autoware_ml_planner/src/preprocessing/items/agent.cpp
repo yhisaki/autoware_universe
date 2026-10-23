@@ -115,13 +115,12 @@ std::vector<SelectedAgent> select_current_agents(
   return result;
 }
 
-xt::xarray<float> create_neighbor_agent_sequence(
+std::vector<AgentPoseSequence> extract_neighbor_agent_sequence(
   const MessageView<TrackedObjects> & objects_msgs, const std::vector<SelectedAgent> & agents,
   const rclcpp::Time & current_time, const Eigen::Matrix4d & map_to_ego_transform,
   const size_t max_num_agent, const size_t time_length, const double time_step_s,
   const AgentSequenceDirection direction, const std::optional<double> observation_timeout_s)
 {
-  xt::xarray<float> data = xt::zeros<float>({max_num_agent, time_length, AGENT_POSE_DIM});
   const double current_sec = current_time.seconds();
   struct Observation
   {
@@ -133,6 +132,7 @@ xt::xarray<float> create_neighbor_agent_sequence(
   for (size_t i = 0; i < num_agents; ++i) {
     selected_indices.emplace(agents[i].object_id, i);
   }
+  std::vector<AgentPoseSequence> data(num_agents, AgentPoseSequence(time_length));
   std::vector<std::vector<Observation>> observations(num_agents);
   for (const auto & msg : objects_msgs) {
     const double stamp_sec = rclcpp::Time(msg.header.stamp).seconds();
@@ -174,12 +174,30 @@ xt::xarray<float> create_neighbor_agent_sequence(
         continue;
       }
       const TrackedObject * observation = agent_observations[observation_idx].object;
-      const Eigen::Matrix4d pose =
+      data[agent_idx][t] =
         map_to_ego_transform *
         utils::pose_to_matrix4d(observation->kinematics.pose_with_covariance.pose);
-      const auto [cos_yaw, sin_yaw] = utils::rotation_matrix_to_cos_sin(pose.block<3, 3>(0, 0));
-      data(agent_idx, t, 0) = static_cast<float>(pose(0, 3));
-      data(agent_idx, t, 1) = static_cast<float>(pose(1, 3));
+    }
+  }
+  return data;
+}
+
+xt::xarray<float> create_neighbor_agent_sequence_tensor(
+  const std::vector<AgentPoseSequence> & sequences, const size_t max_num_agent,
+  const size_t time_length)
+{
+  xt::xarray<float> data = xt::zeros<float>({max_num_agent, time_length, AGENT_POSE_DIM});
+  const size_t num_agents = std::min(sequences.size(), max_num_agent);
+  for (size_t agent_idx = 0; agent_idx < num_agents; ++agent_idx) {
+    const size_t num_timesteps = std::min(sequences[agent_idx].size(), time_length);
+    for (size_t t = 0; t < num_timesteps; ++t) {
+      const auto & pose = sequences[agent_idx][t];
+      if (!pose) {
+        continue;
+      }
+      const auto [cos_yaw, sin_yaw] = utils::rotation_matrix_to_cos_sin(pose->block<3, 3>(0, 0));
+      data(agent_idx, t, 0) = static_cast<float>((*pose)(0, 3));
+      data(agent_idx, t, 1) = static_cast<float>((*pose)(1, 3));
       data(agent_idx, t, 2) = cos_yaw;
       data(agent_idx, t, 3) = sin_yaw;
     }

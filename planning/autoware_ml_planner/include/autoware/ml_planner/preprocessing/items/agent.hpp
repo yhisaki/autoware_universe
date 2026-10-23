@@ -59,11 +59,26 @@ std::vector<SelectedAgent> select_current_agents(
   const MessageView<TrackedObjects> & objects_msgs, const rclcpp::Time & current_time,
   const Eigen::Matrix4d & map_to_ego_transform, size_t max_num_agent);
 
-xt::xarray<float> create_neighbor_agent_sequence(
+/// Ego-frame pose per grid timestep of one agent; std::nullopt when not observed.
+using AgentPoseSequence = std::vector<std::optional<Eigen::Matrix4d>>;
+
+/**
+ * @brief Extracts the pose sequence of each selected agent on a fixed time grid.
+ *
+ * @return One sequence of time_length poses per agent (at most max_num_agent), oldest first.
+ */
+std::vector<AgentPoseSequence> extract_neighbor_agent_sequence(
   const MessageView<TrackedObjects> & objects_msgs, const std::vector<SelectedAgent> & agents,
   const rclcpp::Time & current_time, const Eigen::Matrix4d & map_to_ego_transform,
   size_t max_num_agent, size_t time_length, double time_step_s, AgentSequenceDirection direction,
   std::optional<double> observation_timeout_s = std::nullopt);
+
+/**
+ * @brief Creates a tensor with shape [max_num_agent, time_length, AGENT_POSE_DIM] containing
+ * [x, y, cos_yaw, sin_yaw]. Unobserved timesteps and padding rows are zero.
+ */
+xt::xarray<float> create_neighbor_agent_sequence_tensor(
+  const std::vector<AgentPoseSequence> & sequences, size_t max_num_agent, size_t time_length);
 
 xt::xarray<float> create_agent_shape(
   const std::vector<SelectedAgent> & agents, size_t max_num_agent);

@@ -19,6 +19,7 @@
 
 #include <xtensor/xbuilder.hpp>
 
+#include <algorithm>
 #include <deque>
 #include <map>
 #include <unordered_map>
@@ -50,24 +51,17 @@ std::map<lanelet::Id, TrafficSignalStamped> create_traffic_signal_map(
   return traffic_signal_id_map;
 }
 
-xt::xarray<float> create_traffic_light_past(
+std::vector<std::vector<TrafficLightState>> extract_traffic_light_past(
   const MessageView<autoware_perception_msgs::msg::TrafficLightGroupArray> & traffic_signals_msgs,
   const std::vector<std::pair<lanelet::Id, int64_t>> & segment_lights, const int64_t max_segments,
   const rclcpp::Time & current_time, const int64_t num_timesteps, const double time_step_s,
   const double timeout_s)
 {
-  constexpr int64_t green_idx = 0;
-  constexpr int64_t amber_idx = 1;
-  constexpr int64_t red_idx = 2;
-  constexpr int64_t unknown_idx = 3;
-  constexpr int64_t white_or_none_idx = 4;
-  constexpr int64_t arrow_idx = 5;
-
   using autoware_perception_msgs::msg::TrafficLightElement;
 
-  xt::xarray<float> history = xt::zeros<float>(
-    {static_cast<size_t>(max_segments), static_cast<size_t>(num_timesteps),
-     static_cast<size_t>(TRAFFIC_LIGHT_ONE_HOT_DIM)});
+  const size_t num_segments = std::min(segment_lights.size(), static_cast<size_t>(max_segments));
+  std::vector<std::vector<TrafficLightState>> history(
+    num_segments, std::vector<TrafficLightState>(static_cast<size_t>(num_timesteps)));
 
   // Collect the observations of every traffic light group in chronological
   // order, keyed by group id.
@@ -87,12 +81,11 @@ xt::xarray<float> create_traffic_light_past(
   const double current_sec = current_time.seconds();
   constexpr double stamp_tolerance_s = 1e-6;
 
-  for (size_t seg = 0; seg < segment_lights.size() && seg < static_cast<size_t>(max_segments);
-       ++seg) {
+  for (size_t seg = 0; seg < num_segments; ++seg) {
     const auto & [traffic_light_id, turn_direction] = segment_lights[seg];
     if (traffic_light_id == LaneSegment::TRAFFIC_LIGHT_ID_NONE) {
-      for (int64_t t = 0; t < num_timesteps; ++t) {
-        history(seg, t, white_or_none_idx) = 1.0f;
+      for (auto & state : history[seg]) {
+        state.kind = TrafficLightState::Kind::NO_TRAFFIC_LIGHT;
       }
       continue;
     }
@@ -117,18 +110,59 @@ xt::xarray<float> create_traffic_light_past(
         (*observations)[obs_idx].stamp_sec <= grid_sec + stamp_tolerance_s &&
         grid_sec - (*observations)[obs_idx].stamp_sec <= timeout_s;
       if (!has_valid_observation) {
-        history(seg, t, unknown_idx) = 1.0f;
-        continue;
+        continue;  // stays UNKNOWN
       }
 
-      const TrafficLightStatus status =
+      TrafficLightState & state = history[seg][static_cast<size_t>(t)];
+      state.kind = TrafficLightState::Kind::OBSERVED;
+      state.status =
         identify_current_light_status(turn_direction, *(*observations)[obs_idx].elements);
-      history(seg, t, green_idx) = status.color == TrafficLightElement::GREEN;
-      history(seg, t, amber_idx) = status.color == TrafficLightElement::AMBER;
-      history(seg, t, red_idx) = status.color == TrafficLightElement::RED;
-      history(seg, t, unknown_idx) = status.color == TrafficLightElement::UNKNOWN;
-      history(seg, t, white_or_none_idx) = status.color == TrafficLightElement::WHITE;
-      history(seg, t, arrow_idx) = status.is_arrow ? 1.0f : 0.0f;
+    }
+  }
+
+  return history;
+}
+
+xt::xarray<float> create_traffic_light_past_tensor(
+  const std::vector<std::vector<TrafficLightState>> & states, const int64_t max_segments,
+  const int64_t num_timesteps)
+{
+  constexpr int64_t green_idx = 0;
+  constexpr int64_t amber_idx = 1;
+  constexpr int64_t red_idx = 2;
+  constexpr int64_t unknown_idx = 3;
+  constexpr int64_t white_or_none_idx = 4;
+  constexpr int64_t arrow_idx = 5;
+
+  using autoware_perception_msgs::msg::TrafficLightElement;
+
+  xt::xarray<float> history = xt::zeros<float>(
+    {static_cast<size_t>(max_segments), static_cast<size_t>(num_timesteps),
+     static_cast<size_t>(TRAFFIC_LIGHT_ONE_HOT_DIM)});
+
+  const size_t num_segments = std::min(states.size(), static_cast<size_t>(max_segments));
+  for (size_t seg = 0; seg < num_segments; ++seg) {
+    const size_t num_states = std::min(states[seg].size(), static_cast<size_t>(num_timesteps));
+    for (size_t t = 0; t < num_states; ++t) {
+      const TrafficLightState & state = states[seg][t];
+      switch (state.kind) {
+        case TrafficLightState::Kind::NO_TRAFFIC_LIGHT:
+          history(seg, t, white_or_none_idx) = 1.0f;
+          break;
+        case TrafficLightState::Kind::UNKNOWN:
+          history(seg, t, unknown_idx) = 1.0f;
+          break;
+        case TrafficLightState::Kind::OBSERVED: {
+          const TrafficLightStatus & status = state.status;
+          history(seg, t, green_idx) = status.color == TrafficLightElement::GREEN;
+          history(seg, t, amber_idx) = status.color == TrafficLightElement::AMBER;
+          history(seg, t, red_idx) = status.color == TrafficLightElement::RED;
+          history(seg, t, unknown_idx) = status.color == TrafficLightElement::UNKNOWN;
+          history(seg, t, white_or_none_idx) = status.color == TrafficLightElement::WHITE;
+          history(seg, t, arrow_idx) = status.is_arrow ? 1.0f : 0.0f;
+          break;
+        }
+      }
     }
   }
 

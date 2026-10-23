@@ -313,9 +313,10 @@ preprocess::TensorMapResult MLPlannerCore::create_input_data(
   if (!single_input_result) {
     return tl::unexpected(single_input_result.error());
   }
-  auto builder_output = std::move(single_input_result.value());
-  selected_agents_ = std::move(builder_output.selected_agents);
-  TensorMap single_input_data_map = std::move(builder_output.tensors);
+  auto & builder_output = single_input_result.value();
+  TensorMap single_input_data_map = builder_output.get_tensor();
+  selected_agents_ = std::move(builder_output.agents.selected);
+  map_data_ = std::move(builder_output.map);
   utils::drop_steering_and_wheel_base(single_input_data_map);
 
   // Replicate for batch

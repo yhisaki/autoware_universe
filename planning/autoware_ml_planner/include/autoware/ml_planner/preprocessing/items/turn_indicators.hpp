@@ -24,12 +24,17 @@
 
 #include <cstdint>
 #include <deque>
+#include <vector>
 
 namespace autoware::ml_planner::preprocess
 {
-xt::xarray<float> create_turn_indicators(
+// Returns the turn indicator report value per grid timestep (oldest first); zero when no message
+std::vector<uint8_t> extract_turn_indicators(
   const MessageView<autoware_vehicle_msgs::msg::TurnIndicatorsReport> & turn_indicators_msgs,
   const rclcpp::Time & current_time, int64_t num_timesteps, double time_step_s);
+
+// Returns a tensor with shape [turn_indicators.size()]
+xt::xarray<float> create_turn_indicators_tensor(const std::vector<uint8_t> & turn_indicators);
 }  // namespace autoware::ml_planner::preprocess
 
 #endif  // AUTOWARE__ML_PLANNER__PREPROCESSING__ITEMS__TURN_INDICATORS_HPP_

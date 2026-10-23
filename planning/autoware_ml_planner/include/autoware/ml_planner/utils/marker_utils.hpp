@@ -38,14 +38,12 @@ using visualization_msgs::msg::Marker;
 using visualization_msgs::msg::MarkerArray;
 
 /**
- * @brief Creates a visualization marker array representing a lane.
+ * @brief Creates a visualization marker array representing lanes.
  *
- * This function generates a MarkerArray for visualizing a lane using the provided lane vector and
- * shape. The markers can be customized with color, frame, and lifetime, and optionally colored for
- * traffic lights.
- *
- * @param lane_vector A vector of floats representing the lane geometry or points.
- * @param shape A vector of longs specifying the shape or dimensions of the lane data.
+ * @param transform_ego_to_map The transformation matrix to convert points from ego frame to map
+ * frame.
+ * @param lane_tensor Ego-frame lane points, shape [num_segments, num_points, LANE_3D_POINT_DIM]
+ * (see preprocess::LaneData::points).
  * @param stamp The timestamp to assign to the marker messages.
  * @param lifetime The duration for which the markers should remain visible.
  * @param colors An array of 4 floats specifying the RGBA color of the lane markers (default: green
@@ -54,8 +52,8 @@ using visualization_msgs::msg::MarkerArray;
  * @return MarkerArray containing the generated lane markers.
  */
 MarkerArray create_lane_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & lane_vector,
-  const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & lane_tensor,
+  const Time & stamp, const rclcpp::Duration & lifetime,
   const std::array<float, 4> colors = {0.0f, 1.0f, 0.0f, 0.8f},
   const std::string & frame_id = "base_link");
 
@@ -64,8 +62,8 @@ MarkerArray create_lane_marker(
  *
  * @param transform_ego_to_map The transformation matrix to convert points from ego frame to map
  * frame.
- * @param polyline_vector A vector of floats representing the polyline geometry or points.
- * @param shape A vector of longs specifying the shape or dimensions of the polyline data.
+ * @param polyline_tensor Ego-frame polyline points, shape
+ * [num_polylines, num_points, POLYLINE_3D_POINT_DIM] (see preprocess::MapData).
  * @param stamp The timestamp to assign to the marker messages.
  * @param lifetime The duration for which the markers should remain visible.
  * @param colors An array of 4 floats specifying the RGBA marker color.
@@ -74,9 +72,8 @@ MarkerArray create_lane_marker(
  * @return MarkerArray containing the generated polyline markers.
  */
 MarkerArray create_map_polyline_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & polyline_vector,
-  const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
-  const std::array<float, 4> & colors, const std::string & marker_namespace,
-  const std::string & frame_id = "base_link");
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & polyline_tensor,
+  const Time & stamp, const rclcpp::Duration & lifetime, const std::array<float, 4> & colors,
+  const std::string & marker_namespace, const std::string & frame_id = "base_link");
 }  // namespace autoware::ml_planner::utils
 #endif  // AUTOWARE__ML_PLANNER__UTILS__MARKER_UTILS_HPP_

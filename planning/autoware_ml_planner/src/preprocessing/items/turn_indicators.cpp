@@ -17,14 +17,15 @@
 #include <xtensor/xbuilder.hpp>
 
 #include <deque>
+#include <vector>
 
 namespace autoware::ml_planner::preprocess
 {
-xt::xarray<float> create_turn_indicators(
+std::vector<uint8_t> extract_turn_indicators(
   const MessageView<autoware_vehicle_msgs::msg::TurnIndicatorsReport> & turn_indicators_msgs,
   const rclcpp::Time & current_time, const int64_t num_timesteps, const double time_step_s)
 {
-  xt::xarray<float> turn_indicators = xt::zeros<float>({static_cast<size_t>(num_timesteps)});
+  std::vector<uint8_t> turn_indicators(static_cast<size_t>(num_timesteps), 0);
   if (turn_indicators_msgs.empty()) return turn_indicators;
 
   const double current_sec = current_time.seconds();
@@ -37,8 +38,17 @@ xt::xarray<float> create_turn_indicators(
              grid_sec + stamp_tolerance_s) {
       ++msg_idx;
     }
-    turn_indicators(t) = static_cast<float>(turn_indicators_msgs[msg_idx].report);
+    turn_indicators[t] = turn_indicators_msgs[msg_idx].report;
   }
   return turn_indicators;
+}
+
+xt::xarray<float> create_turn_indicators_tensor(const std::vector<uint8_t> & turn_indicators)
+{
+  xt::xarray<float> tensor = xt::zeros<float>({turn_indicators.size()});
+  for (size_t t = 0; t < turn_indicators.size(); ++t) {
+    tensor(t) = static_cast<float>(turn_indicators[t]);
+  }
+  return tensor;
 }
 }  // namespace autoware::ml_planner::preprocess

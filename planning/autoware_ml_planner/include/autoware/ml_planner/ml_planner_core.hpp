@@ -59,8 +59,8 @@ using autoware_perception_msgs::msg::PredictedObjects;
 using autoware_perception_msgs::msg::TrackedObjects;
 using autoware_planning_msgs::msg::LaneletRoute;
 using autoware_planning_msgs::msg::Trajectory;
-using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using autoware_vehicle_msgs::msg::SteeringReport;
+using autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
 using autoware_vehicle_msgs::msg::TurnIndicatorsReport;
 using nav_msgs::msg::Odometry;
 using unique_identifier_msgs::msg::UUID;
@@ -192,6 +192,11 @@ public:
    */
   preprocess::TensorMapResult create_input_data(const preprocess::FrameInputs & frame_inputs);
 
+  /**
+   * @brief Map elements of the last create_input_data() call, with their ego-frame z.
+   */
+  const preprocess::MapData & map_data() const { return map_data_; }
+
   const geometry_msgs::msg::Pose & ego_pose() const { return ego_history_.back().pose.pose; }
 
   double current_steering_angle() const
@@ -287,6 +292,9 @@ private:
 
   // Postprocessing
   std::vector<preprocess::SelectedAgent> selected_agents_;
+
+  // Map elements of the current frame (single batch, not normalized)
+  preprocess::MapData map_data_;
 
   // Raw message history buffers, bounded to the model input time window.
   // All derived history data is computed statelessly from these buffers.

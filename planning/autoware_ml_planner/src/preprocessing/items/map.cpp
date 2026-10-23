@@ -24,6 +24,7 @@
 #include <autoware_lanelet2_extension/regulatory_elements/Forward.hpp>
 #include <autoware_lanelet2_extension/regulatory_elements/road_marking.hpp>  // for lanelet::autoware::RoadMarking
 #include <xtensor/xbuilder.hpp>
+#include <xtensor/xview.hpp>
 
 #include <geometry_msgs/msg/detail/point__struct.hpp>
 
@@ -553,30 +554,23 @@ std::vector<int64_t> LaneSegmentContext::select_lane_segment_indices(
   return selected_indices;
 }
 
-std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>>
-LaneSegmentContext::create_tensor_data_from_indices(
+LaneData LaneSegmentContext::create_lane_data(
   const Eigen::Matrix4d & transform_matrix, const std::vector<int64_t> & segment_indices,
   const int64_t max_segments) const
 {
-  xt::xarray<float> tensor_data = xt::zeros<float>(
+  LaneData lane_data;
+  lane_data.points = xt::zeros<float>(
     {static_cast<size_t>(max_segments), static_cast<size_t>(POINTS_PER_SEGMENT),
-     static_cast<size_t>(SEGMENT_POINT_DIM)});
-  xt::xarray<float> speed_limit_tensor =
-    xt::zeros<float>({static_cast<size_t>(max_segments), size_t{1}});
-  xt::xarray<float> lane_type_tensor =
-    xt::zeros<float>({static_cast<size_t>(max_segments), static_cast<size_t>(LANE_TYPE_DIM)});
+     static_cast<size_t>(LANE_3D_POINT_DIM)});
 
-  auto convert_to_vector4d = [](const LanePoint & point) {
-    return Eigen::Vector4d(point.x(), point.y(), point.z(), 1.0);
-  };
-
-  auto encode = [](const int64_t line_type) {
-    Eigen::Vector<double, LINE_TYPE_NUM> one_hot = Eigen::Vector<double, LINE_TYPE_NUM>::Zero();
-    if (line_type >= 0 && line_type < LINE_TYPE_NUM) {
-      one_hot[line_type] = 1.0;
-    }
-    return one_hot;
-  };
+  const auto set_point =
+    [&](const int64_t segment, const int64_t i, const int64_t offset, const LanePoint & point) {
+      const Eigen::Vector4d transformed =
+        transform_matrix * Eigen::Vector4d(point.x(), point.y(), point.z(), 1.0);
+      lane_data.points(segment, i, offset + 0) = static_cast<float>(transformed.x());
+      lane_data.points(segment, i, offset + 1) = static_cast<float>(transformed.y());
+      lane_data.points(segment, i, offset + 2) = static_cast<float>(transformed.z());
+    };
 
   int64_t added_segments = 0;
   for (const int64_t segment_idx : segment_indices) {
@@ -603,39 +597,74 @@ LaneSegmentContext::create_tensor_data_from_indices(
       continue;
     }
 
-    const Eigen::Vector<double, LINE_TYPE_NUM> lt_left = encode(lane_segment.left_line_type);
-    const Eigen::Vector<double, LINE_TYPE_NUM> lt_right = encode(lane_segment.right_line_type);
-
-    for (int64_t type = 0; type < LINE_TYPE_NUM; ++type) {
-      lane_type_tensor(added_segments, LINE_TYPE_LEFT_START + type) =
-        static_cast<float>(lt_left[type]);
-      lane_type_tensor(added_segments, LINE_TYPE_RIGHT_START + type) =
-        static_cast<float>(lt_right[type]);
-    }
-
-    // Process each point in the segment
     for (int64_t i = 0; i < POINTS_PER_SEGMENT; ++i) {
-      // Center (0, 1)
-      const Eigen::Vector4d center = transform_matrix * convert_to_vector4d(centerline[i]);
-      tensor_data(added_segments, i, X) = static_cast<float>(center.x());
-      tensor_data(added_segments, i, Y) = static_cast<float>(center.y());
-
-      // Left (2, 3)
-      const Eigen::Vector4d left = transform_matrix * convert_to_vector4d(left_boundary[i]);
-      tensor_data(added_segments, i, LB_X) = static_cast<float>(left.x() - center.x());
-      tensor_data(added_segments, i, LB_Y) = static_cast<float>(left.y() - center.y());
-
-      // Right (4, 5)
-      const Eigen::Vector4d right = transform_matrix * convert_to_vector4d(right_boundary[i]);
-      tensor_data(added_segments, i, RB_X) = static_cast<float>(right.x() - center.x());
-      tensor_data(added_segments, i, RB_Y) = static_cast<float>(right.y() - center.y());
+      set_point(added_segments, i, LANE_3D_CENTER, centerline[i]);
+      set_point(added_segments, i, LANE_3D_LB, left_boundary[i]);
+      set_point(added_segments, i, LANE_3D_RB, right_boundary[i]);
     }
 
-    speed_limit_tensor(added_segments, 0) = lane_segment.speed_limit_mps.value_or(0.0f);
+    lane_data.line_types.emplace_back(lane_segment.left_line_type, lane_segment.right_line_type);
+    lane_data.speed_limits_mps.push_back(lane_segment.speed_limit_mps);
     ++added_segments;
   }
 
-  return {std::move(tensor_data), std::move(lane_type_tensor), std::move(speed_limit_tensor)};
+  return lane_data;
+}
+
+xt::xarray<float> create_lane_input_tensor(const xt::xarray<float> & lanes_3d)
+{
+  const size_t num_segments = lanes_3d.shape(0);
+  const size_t num_points = lanes_3d.shape(1);
+  xt::xarray<float> tensor =
+    xt::zeros<float>({num_segments, num_points, static_cast<size_t>(SEGMENT_POINT_DIM)});
+  for (size_t l = 0; l < num_segments; ++l) {
+    for (size_t p = 0; p < num_points; ++p) {
+      const float center_x = lanes_3d(l, p, LANE_3D_CENTER + 0);
+      const float center_y = lanes_3d(l, p, LANE_3D_CENTER + 1);
+      tensor(l, p, X) = center_x;
+      tensor(l, p, Y) = center_y;
+      tensor(l, p, LB_X) = lanes_3d(l, p, LANE_3D_LB + 0) - center_x;
+      tensor(l, p, LB_Y) = lanes_3d(l, p, LANE_3D_LB + 1) - center_y;
+      tensor(l, p, RB_X) = lanes_3d(l, p, LANE_3D_RB + 0) - center_x;
+      tensor(l, p, RB_Y) = lanes_3d(l, p, LANE_3D_RB + 1) - center_y;
+    }
+  }
+  return tensor;
+}
+
+xt::xarray<float> create_lane_type_tensor(
+  const std::vector<std::pair<LineType, LineType>> & line_types, const int64_t max_segments)
+{
+  xt::xarray<float> lane_type_tensor =
+    xt::zeros<float>({static_cast<size_t>(max_segments), static_cast<size_t>(LANE_TYPE_DIM)});
+  const auto encode = [&](const size_t segment, const int64_t start, const int64_t line_type) {
+    if (line_type >= 0 && line_type < LINE_TYPE_NUM) {
+      lane_type_tensor(segment, start + line_type) = 1.0f;
+    }
+  };
+  const size_t num_segments = std::min(line_types.size(), static_cast<size_t>(max_segments));
+  for (size_t segment = 0; segment < num_segments; ++segment) {
+    encode(segment, LINE_TYPE_LEFT_START, line_types[segment].first);
+    encode(segment, LINE_TYPE_RIGHT_START, line_types[segment].second);
+  }
+  return lane_type_tensor;
+}
+
+xt::xarray<float> create_speed_limit_tensor(
+  const std::vector<std::optional<float>> & speed_limits_mps, const int64_t max_segments)
+{
+  xt::xarray<float> speed_limit_tensor =
+    xt::zeros<float>({static_cast<size_t>(max_segments), size_t{1}});
+  const size_t num_segments = std::min(speed_limits_mps.size(), static_cast<size_t>(max_segments));
+  for (size_t segment = 0; segment < num_segments; ++segment) {
+    speed_limit_tensor(segment, 0) = speed_limits_mps[segment].value_or(0.0f);
+  }
+  return speed_limit_tensor;
+}
+
+xt::xarray<float> create_polyline_input_tensor(const xt::xarray<float> & polylines_3d)
+{
+  return xt::view(polylines_3d, xt::all(), xt::all(), xt::range(0, 2));
 }
 
 namespace
@@ -686,13 +715,15 @@ xt::xarray<float> create_polyline_tensor(
     });
 
   xt::xarray<float> tensor = xt::zeros<float>(
-    {static_cast<size_t>(num_elements), static_cast<size_t>(num_points), size_t{2}});
+    {static_cast<size_t>(num_elements), static_cast<size_t>(num_points),
+     static_cast<size_t>(POLYLINE_3D_POINT_DIM)});
   const size_t count = std::min(static_cast<size_t>(num_elements), selected.size());
   for (size_t i = 0; i < count; ++i) {
     const size_t point_count = std::min(static_cast<size_t>(num_points), selected[i].points.size());
     for (size_t j = 0; j < point_count; ++j) {
       tensor(i, j, 0) = static_cast<float>(selected[i].points[j].x());
       tensor(i, j, 1) = static_cast<float>(selected[i].points[j].y());
+      tensor(i, j, 2) = static_cast<float>(selected[i].points[j].z());
     }
   }
   return tensor;

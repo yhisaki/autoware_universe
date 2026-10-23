@@ -22,6 +22,7 @@
 #include <geometry_msgs/msg/detail/point__struct.hpp>
 #include <geometry_msgs/msg/point.hpp>  // Include the header for Point
 
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -52,55 +53,14 @@ Marker create_base_marker(
   return marker;
 }
 
-// Helper to extract point data from lane vector
-struct LanePointData
+// Helper to transform an ego-frame point to the target frame
+Eigen::Vector4d transform_point(
+  const xt::xarray<float> & tensor, size_t l, size_t p, int64_t offset,
+  const Eigen::Matrix4d & transform)
 {
-  double x, y;
-  double lb_x, lb_y;
-  double rb_x, rb_y;
-  double norm;
-};
-
-LanePointData extract_lane_point(
-  const xt::xarray<float> & lane_vector, int64_t l, int64_t p, int64_t P, int64_t D)
-{
-  LanePointData data;
-  data.x = lane_vector[P * D * l + p * D + X];
-  data.y = lane_vector[P * D * l + p * D + Y];
-  data.lb_x = lane_vector[P * D * l + p * D + LB_X] + data.x;
-  data.lb_y = lane_vector[P * D * l + p * D + LB_Y] + data.y;
-  data.rb_x = lane_vector[P * D * l + p * D + RB_X] + data.x;
-  data.rb_y = lane_vector[P * D * l + p * D + RB_Y] + data.y;
-  data.norm = std::sqrt(data.x * data.x + data.y * data.y);
-  return data;
-}
-
-// Helper to transform points
-struct TransformedPoints
-{
-  double x, y, z;
-  double lb_x, lb_y;
-  double rb_x, rb_y;
-};
-
-TransformedPoints transform_lane_points(
-  const LanePointData & data, const Eigen::Matrix4d & transform)
-{
-  Eigen::Matrix<double, 4, 3> points;
-  points << data.x, data.lb_x, data.rb_x, data.y, data.lb_y, data.rb_y, 0.0, 0.0, 0.0, 1.0, 1.0,
-    1.0;
-
-  Eigen::Matrix<double, 4, 3> transformed = transform * points;
-
-  TransformedPoints result;
-  result.x = transformed(0, 0);
-  result.y = transformed(1, 0);
-  result.lb_x = transformed(0, 1);
-  result.lb_y = transformed(1, 1);
-  result.rb_x = transformed(0, 2);
-  result.rb_y = transformed(1, 2);
-  result.z = transformed(2, 0) + 0.1f;
-  return result;
+  const Eigen::Vector4d point(
+    tensor(l, p, offset + 0), tensor(l, p, offset + 1), tensor(l, p, offset + 2), 1.0);
+  return transform * point;
 }
 
 // Helper to add point to marker
@@ -116,21 +76,18 @@ void add_point_to_marker(Marker & marker, double x, double y, double z)
 }  // anonymous namespace
 
 MarkerArray create_map_polyline_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & polyline_vector,
-  const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
-  const std::array<float, 4> & colors, const std::string & marker_namespace,
-  const std::string & frame_id)
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & polyline_tensor,
+  const Time & stamp, const rclcpp::Duration & lifetime, const std::array<float, 4> & colors,
+  const std::string & marker_namespace, const std::string & frame_id)
 {
   MarkerArray marker_array;
-  if (shape.size() < 4) {
+  if (
+    polyline_tensor.dimension() != 3 ||
+    polyline_tensor.shape(2) != static_cast<size_t>(POLYLINE_3D_POINT_DIM)) {
     return marker_array;
   }
-  const int64_t P = shape[2];
-  const int64_t D = shape[3];
-  if (P <= 0 || D < 2 || polyline_vector.size() % static_cast<size_t>(P * D) != 0) {
-    return marker_array;
-  }
-  const size_t num_polylines = polyline_vector.size() / static_cast<size_t>(P * D);
+  const size_t num_polylines = polyline_tensor.shape(0);
+  const size_t num_points = polyline_tensor.shape(1);
   constexpr float near_zero_threshold = 1e-2f;
   ColorRGBA color;
   color.r = colors[0];
@@ -143,23 +100,18 @@ MarkerArray create_map_polyline_marker(
       stamp, frame_id, marker_namespace, static_cast<int>(l), Marker::LINE_STRIP, color, lifetime,
       0.2);
 
-    float total_norm = 0.0f;
-    for (int64_t p = 0; p < P; ++p) {
-      const float x = polyline_vector[P * D * static_cast<int64_t>(l) + p * D + X];
-      const float y = polyline_vector[P * D * static_cast<int64_t>(l) + p * D + Y];
-      const float norm = std::sqrt(x * x + y * y);
-      total_norm += norm;
-
-      if (norm < near_zero_threshold) {
+    for (size_t p = 0; p < num_points; ++p) {
+      // Skip near-zero points (padding)
+      if (std::hypot(polyline_tensor(l, p, 0), polyline_tensor(l, p, 1)) < near_zero_threshold) {
         continue;
       }
 
-      const Eigen::Vector4d pt_ego(x, y, 0.0, 1.0);
-      const Eigen::Vector4d pt_map = transform_ego_to_map * pt_ego;
+      const Eigen::Vector4d pt_map =
+        transform_point(polyline_tensor, l, p, 0, transform_ego_to_map);
       add_point_to_marker(marker, pt_map.x(), pt_map.y(), pt_map.z() + 0.1);
     }
 
-    if (total_norm < near_zero_threshold || marker.points.empty()) {
+    if (marker.points.empty()) {
       continue;
     }
 
@@ -170,14 +122,18 @@ MarkerArray create_map_polyline_marker(
 }
 
 MarkerArray create_lane_marker(
-  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & lane_vector,
-  const std::vector<int64_t> & shape, const Time & stamp, const rclcpp::Duration & lifetime,
-  const std::array<float, 4> colors, const std::string & frame_id)
+  const Eigen::Matrix4d & transform_ego_to_map, const xt::xarray<float> & lane_tensor,
+  const Time & stamp, const rclcpp::Duration & lifetime, const std::array<float, 4> colors,
+  const std::string & frame_id)
 {
   MarkerArray marker_array;
-  const int64_t P = shape[2];
-  const int64_t D = shape[3];
-  const size_t num_segments = lane_vector.size() / (P * D);
+  if (
+    lane_tensor.dimension() != 3 ||
+    lane_tensor.shape(2) != static_cast<size_t>(LANE_3D_POINT_DIM)) {
+    return marker_array;
+  }
+  const size_t num_segments = lane_tensor.shape(0);
+  const size_t num_points = lane_tensor.shape(1);
   int64_t segment_count = 0;
   constexpr double near_zero_threshold = 1e-2;
   // Setup colors
@@ -220,46 +176,39 @@ MarkerArray create_lane_marker(
     marker_sphere.scale.z = 0.5;
 
     // Process points for this segment
-    float total_norm = 0.0f;
-    for (int64_t p = 0; p < P; ++p) {
-      // Extract point data
-      LanePointData point_data = extract_lane_point(lane_vector, l, p, P, D);
-      total_norm += point_data.norm;
-
-      // Skip near-zero points (likely padding)
-      if (point_data.norm < near_zero_threshold) {
+    for (size_t p = 0; p < num_points; ++p) {
+      // Skip near-zero points (padding)
+      const double norm =
+        std::hypot(lane_tensor(l, p, LANE_3D_CENTER + 0), lane_tensor(l, p, LANE_3D_CENTER + 1));
+      if (norm < near_zero_threshold) {
         continue;
       }
 
       // Transform points from ego to map frame
-      TransformedPoints transformed = transform_lane_points(point_data, transform_ego_to_map);
+      const Eigen::Vector4d center =
+        transform_point(lane_tensor, l, p, LANE_3D_CENTER, transform_ego_to_map);
+      const Eigen::Vector4d left =
+        transform_point(lane_tensor, l, p, LANE_3D_LB, transform_ego_to_map);
+      const Eigen::Vector4d right =
+        transform_point(lane_tensor, l, p, LANE_3D_RB, transform_ego_to_map);
 
       // Add points to respective markers
-      add_point_to_marker(marker_centerline, transformed.x, transformed.y, transformed.z);
-      add_point_to_marker(marker_left_bound, transformed.lb_x, transformed.lb_y, transformed.z);
-      add_point_to_marker(marker_right_bound, transformed.rb_x, transformed.rb_y, transformed.z);
-      add_point_to_marker(marker_sphere, transformed.x, transformed.y, transformed.z + 0.1f);
+      add_point_to_marker(marker_centerline, center.x(), center.y(), center.z() + 0.1);
+      add_point_to_marker(marker_left_bound, left.x(), left.y(), left.z() + 0.1);
+      add_point_to_marker(marker_right_bound, right.x(), right.y(), right.z() + 0.1);
+      add_point_to_marker(marker_sphere, center.x(), center.y(), center.z() + 0.2);
     }
 
     // Skip empty segments
-    if (total_norm < near_zero_threshold) {
+    if (marker_centerline.points.empty()) {
       continue;
     }
     ++segment_count;
 
-    // Add non-empty markers to array
-    if (!marker_sphere.points.empty()) {
-      marker_array.markers.push_back(marker_sphere);
-    }
-    if (!marker_centerline.points.empty()) {
-      marker_array.markers.push_back(marker_centerline);
-    }
-    if (!marker_left_bound.points.empty()) {
-      marker_array.markers.push_back(marker_left_bound);
-    }
-    if (!marker_right_bound.points.empty()) {
-      marker_array.markers.push_back(marker_right_bound);
-    }
+    marker_array.markers.push_back(marker_sphere);
+    marker_array.markers.push_back(marker_centerline);
+    marker_array.markers.push_back(marker_left_bound);
+    marker_array.markers.push_back(marker_right_bound);
   }
 
   return marker_array;

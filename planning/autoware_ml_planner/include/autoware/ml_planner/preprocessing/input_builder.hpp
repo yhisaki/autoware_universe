@@ -16,6 +16,7 @@
 #define AUTOWARE__ML_PLANNER__PREPROCESSING__INPUT_BUILDER_HPP_
 
 #include "autoware/ml_planner/preprocessing/items/agent.hpp"
+#include "autoware/ml_planner/preprocessing/items/ego_history.hpp"
 #include "autoware/ml_planner/preprocessing/items/map.hpp"
 #include "autoware/ml_planner/preprocessing/message_view.hpp"
 #include "autoware/ml_planner/preprocessing/preprocessing_utils.hpp"
@@ -33,6 +34,7 @@
 
 #include <lanelet2_core/LaneletMap.h>
 
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <string>
@@ -97,10 +99,57 @@ struct InputBuilderParams
   double traffic_light_group_msg_timeout_seconds{0.2};
 };
 
+/**
+ * @brief Ego vehicle data. Poses are in the ego frame at frame_inputs.frame_time.
+ */
+struct EgoData
+{
+  std::vector<EgoHistoryPoint> history;  ///< INPUT_T + 1 timesteps, oldest first
+  std::vector<uint8_t> turn_indicators;  ///< Report value per timestep, INPUT_T + 1 timesteps
+  VehicleSpec vehicle_spec;
+  Eigen::Matrix4d goal_pose{Eigen::Matrix4d::Identity()};
+};
+
+/**
+ * @brief Neighbor agents selected for the model input. Row i of every member is the same agent.
+ */
+struct AgentData
+{
+  std::vector<SelectedAgent> selected;
+  std::vector<AgentPoseSequence> past_poses;  ///< INPUT_T + 1 timesteps per agent, oldest first
+};
+
+/**
+ * @brief Map elements selected for the model input, as ego-frame (x, y, z) points.
+ *
+ * The z is dropped for the model, but kept here for visualization.
+ */
+struct MapData
+{
+  LaneData lanes;        ///< At most NUM_SEGMENTS_IN_LANE segments
+  LaneData route_lanes;  ///< At most NUM_SEGMENTS_IN_ROUTE segments
+  /// [NUM_INTERSECTION_AREAS, POINTS_PER_INTERSECTION_AREA, POLYLINE_3D_POINT_DIM]
+  xt::xarray<float> intersection_areas;
+  /// [NUM_STOP_LINES, POINTS_PER_STOP_LINE, POLYLINE_3D_POINT_DIM]
+  xt::xarray<float> stop_lines;
+  /// [NUM_ROAD_BORDERS, POINTS_PER_ROAD_BORDER, POLYLINE_3D_POINT_DIM]
+  xt::xarray<float> road_borders;
+};
+
+/**
+ * @brief Model input data of one frame, before conversion to tensors.
+ */
 struct InputBuilderOutput
 {
-  TensorMap tensors;
-  std::vector<SelectedAgent> selected_agents;
+  EgoData ego;
+  AgentData agents;
+  MapData map;
+
+  /**
+   * @brief Convert to a single-batch TensorMap with every model input except "initial_noise"
+   * (inference-only random noise). No normalization and no batch replication is applied.
+   */
+  TensorMap get_tensor() const;
 };
 
 using InputBuilderResult = tl::expected<InputBuilderOutput, std::string>;
@@ -116,11 +165,9 @@ std::unique_ptr<LaneSegmentContext> build_map_context(
   double line_string_max_step_m);
 
 /**
- * @brief Build the model input tensors for one frame (stage 2, pure function).
+ * @brief Build the model input data for one frame (stage 2, pure function).
  *
- * Produces a single-batch TensorMap with every model input except
- * "initial_noise" (inference-only random noise). No normalization and
- * no batch replication is applied; callers layer those on top as needed.
+ * Use InputBuilderOutput::get_tensor() to get the model input tensors.
  * All features are expressed in the ego frame at frame_inputs.frame_time.
  */
 InputBuilderResult create_input_data_map(

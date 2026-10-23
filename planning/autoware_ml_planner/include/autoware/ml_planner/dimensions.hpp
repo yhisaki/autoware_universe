@@ -60,6 +60,14 @@ inline constexpr int64_t LB_Y = 3;
 inline constexpr int64_t RB_X = 4;
 inline constexpr int64_t RB_Y = 5;
 inline constexpr int64_t SEGMENT_POINT_DIM = 6;
+// Lane point layout of preprocess::MapData: ego-frame (x, y, z) of the center, left bound and
+// right bound
+inline constexpr int64_t LANE_3D_CENTER = 0;
+inline constexpr int64_t LANE_3D_LB = 3;
+inline constexpr int64_t LANE_3D_RB = 6;
+inline constexpr int64_t LANE_3D_POINT_DIM = 9;
+// Polyline point layout of preprocess::MapData: ego-frame (x, y, z)
+inline constexpr int64_t POLYLINE_3D_POINT_DIM = 3;
 inline constexpr int64_t LINE_TYPE_LEFT_START = 0;
 inline constexpr int64_t LINE_TYPE_RIGHT_START = LINE_TYPE_NUM;
 inline constexpr int64_t LANE_TYPE_DIM = 2 * LINE_TYPE_NUM;

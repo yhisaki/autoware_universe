@@ -26,28 +26,48 @@
 
 #include <cstddef>
 #include <deque>
+#include <vector>
 
 namespace autoware::ml_planner::preprocess
 {
 
 /**
- * @brief Creates ego history data, including the current state, from odometry messages.
+ * @brief Ego state at one history timestep.
+ */
+struct EgoHistoryPoint
+{
+  Eigen::Matrix4d pose{Eigen::Matrix4d::Identity()};  ///< Pose in the ego frame.
+  double velocity_mps{0.0};
+  double yaw_rate_rps{0.0};  ///< Raw yaw rate; the model-specific clipping is applied on tensor.
+  double steering_tire_angle_rad{0.0};
+};
+
+/**
+ * @brief Extracts the ego history, including the current state, from odometry messages.
  *
- * Generates the trajectory by interpolating poses on a fixed time grid (0.1 s)
- * backwards from the reference time.
+ * Interpolates the states on a fixed time grid (0.1 s) backwards from the reference time.
  *
  * @param[in] odom_msgs Chronological deque of odometry messages
  * @param[in] steering_msgs Chronological steering reports; steering is zero when empty
  * @param[in] num_timesteps Number of timesteps to process
  * @param[in] map_to_ego_transform Transformation matrix from map to ego frame
  * @param[in] reference_time Time of the newest grid sample
- * @return Tensor with shape [num_timesteps, 7] containing
+ * @return num_timesteps states, oldest first
+ */
+std::vector<EgoHistoryPoint> extract_ego_history(
+  const MessageView<nav_msgs::msg::Odometry> & odom_msgs,
+  const MessageView<autoware_vehicle_msgs::msg::SteeringReport> & steering_msgs,
+  size_t num_timesteps, const Eigen::Matrix4d & map_to_ego_transform,
+  const rclcpp::Time & reference_time);
+
+/**
+ * @brief Creates the ego history tensor.
+ *
+ * @param[in] history Ego history from extract_ego_history()
+ * @return Tensor with shape [history.size(), 7] containing
  * [x, y, cos_yaw, sin_yaw, velocity, steering_tire_angle, yaw_rate]
  */
-xt::xarray<float> create_ego_history(
-  const MessageView<nav_msgs::msg::Odometry> & odom_msgs,
-  const MessageView<autoware_vehicle_msgs::msg::SteeringReport> & steering_msgs, size_t num_timesteps,
-  const Eigen::Matrix4d & map_to_ego_transform, const rclcpp::Time & reference_time);
+xt::xarray<float> create_ego_history_tensor(const std::vector<EgoHistoryPoint> & history);
 
 }  // namespace autoware::ml_planner::preprocess
 

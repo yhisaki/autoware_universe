@@ -18,10 +18,14 @@
 
 namespace autoware::ml_planner::preprocess
 {
-xt::xarray<float> create_goal_pose(
+Eigen::Matrix4d extract_goal_pose(
   const geometry_msgs::msg::Pose & goal_pose, const Eigen::Matrix4d & map_to_ego_transform)
 {
-  const Eigen::Matrix4d goal_pose_ego = map_to_ego_transform * utils::pose_to_matrix4d(goal_pose);
+  return map_to_ego_transform * utils::pose_to_matrix4d(goal_pose);
+}
+
+xt::xarray<float> create_goal_pose_tensor(const Eigen::Matrix4d & goal_pose_ego)
+{
   const auto [cos_yaw, sin_yaw] =
     utils::rotation_matrix_to_cos_sin(goal_pose_ego.block<3, 3>(0, 0));
   return {

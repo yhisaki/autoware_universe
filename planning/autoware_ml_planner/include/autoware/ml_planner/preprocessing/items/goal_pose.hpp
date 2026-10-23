@@ -22,8 +22,12 @@
 
 namespace autoware::ml_planner::preprocess
 {
-xt::xarray<float> create_goal_pose(
+// Returns the goal pose in the ego frame
+Eigen::Matrix4d extract_goal_pose(
   const geometry_msgs::msg::Pose & goal_pose, const Eigen::Matrix4d & map_to_ego_transform);
+
+// Returns [x, y, cos_yaw, sin_yaw] of the ego-frame goal pose
+xt::xarray<float> create_goal_pose_tensor(const Eigen::Matrix4d & goal_pose_ego);
 }  // namespace autoware::ml_planner::preprocess
 
 #endif  // AUTOWARE__ML_PLANNER__PREPROCESSING__ITEMS__GOAL_POSE_HPP_

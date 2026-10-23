@@ -617,37 +617,33 @@ void MLPlanner::publish_first_traffic_light_on_route() const
 }
 
 void MLPlanner::publish_debug_markers(
-  const TensorMap & input_data_map, const Eigen::Matrix4d & ego_to_map_transform,
+  const preprocess::MapData & map_data, const Eigen::Matrix4d & ego_to_map_transform,
   const rclcpp::Time & timestamp) const
 {
   if (debug_params_.publish_debug_route) {
     auto lifetime = rclcpp::Duration::from_seconds(0.2);
     auto route_markers = utils::create_lane_marker(
-      ego_to_map_transform, input_data_map.at("route_lanes"),
-      std::vector<int64_t>(ROUTE_LANES_SHAPE.begin(), ROUTE_LANES_SHAPE.end()), timestamp, lifetime,
-      {0.8, 0.8, 0.8, 0.8}, "map");
+      ego_to_map_transform, map_data.route_lanes.points, timestamp, lifetime, {0.8, 0.8, 0.8, 0.8},
+      "map");
     pub_route_marker_->publish(route_markers);
   }
 
   if (debug_params_.publish_debug_map) {
     auto lifetime = rclcpp::Duration::from_seconds(0.2);
     auto lane_markers = utils::create_lane_marker(
-      ego_to_map_transform, input_data_map.at("lanes"),
-      std::vector<int64_t>(LANES_SHAPE.begin(), LANES_SHAPE.end()), timestamp, lifetime,
-      {0.1, 0.1, 0.7, 0.8}, "map");
+      ego_to_map_transform, map_data.lanes.points, timestamp, lifetime, {0.1, 0.1, 0.7, 0.8},
+      "map");
     pub_lane_marker_->publish(lane_markers);
   }
 
   if (debug_params_.publish_debug_linestrings) {
     auto lifetime = rclcpp::Duration::from_seconds(0.2);
     auto map_markers = utils::create_map_polyline_marker(
-      ego_to_map_transform, input_data_map.at("stop_lines"),
-      std::vector<int64_t>(STOP_LINES_SHAPE.begin(), STOP_LINES_SHAPE.end()), timestamp, lifetime,
-      {1.0f, 0.65f, 0.0f, 0.8f}, "stop_line", "map");
+      ego_to_map_transform, map_data.stop_lines, timestamp, lifetime, {1.0f, 0.65f, 0.0f, 0.8f},
+      "stop_line", "map");
     auto road_border_markers = utils::create_map_polyline_marker(
-      ego_to_map_transform, input_data_map.at("road_borders"),
-      std::vector<int64_t>(ROAD_BORDERS_SHAPE.begin(), ROAD_BORDERS_SHAPE.end()), timestamp,
-      lifetime, {0.8f, 0.0f, 0.2f, 0.8f}, "road_border", "map");
+      ego_to_map_transform, map_data.road_borders, timestamp, lifetime, {0.8f, 0.0f, 0.2f, 0.8f},
+      "road_border", "map");
     map_markers.markers.insert(
       map_markers.markers.end(), road_border_markers.markers.begin(),
       road_border_markers.markers.end());
@@ -751,7 +747,7 @@ void MLPlanner::on_timer()
   }
 
   const Eigen::Matrix4d ego_to_map_transform = utils::pose_to_matrix4d(core_->ego_pose());
-  publish_debug_markers(input_data_map, ego_to_map_transform, frame_time);
+  publish_debug_markers(core_->map_data(), ego_to_map_transform, frame_time);
 
   publish_first_traffic_light_on_route();
 

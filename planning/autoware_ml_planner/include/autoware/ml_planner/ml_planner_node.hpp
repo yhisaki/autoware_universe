@@ -146,11 +146,11 @@ private:
 
   /**
    * @brief Publish visualization markers for debugging.
-   * @param input_data_map Input data used for inference.
+   * @param map_data Map elements selected for the model input, with their ego-frame z.
    * @param ego_to_map_transform Transform from ego to map frame for visualization.
    */
   void publish_debug_markers(
-    const TensorMap & input_data_map, const Eigen::Matrix4d & ego_to_map_transform,
+    const preprocess::MapData & map_data, const Eigen::Matrix4d & ego_to_map_transform,
     const rclcpp::Time & timestamp) const;
 
   /**

@@ -23,6 +23,7 @@
 
 #include <autoware_perception_msgs/msg/detail/traffic_light_group__struct.hpp>
 #include <autoware_perception_msgs/msg/detail/traffic_light_group_array__struct.hpp>
+#include <autoware_perception_msgs/msg/traffic_light_element.hpp>
 #include <autoware_perception_msgs/msg/traffic_signal.hpp>
 
 #include <lanelet2_traffic_rules/TrafficRules.h>
@@ -62,28 +63,64 @@ std::map<lanelet::Id, TrafficSignalStamped> create_traffic_signal_map(
   const rclcpp::Time & current_time, const double time_threshold_seconds);
 
 /**
- * @brief Build the one-hot traffic light state history tensor per lane segment.
+ * @brief Effective state of a traffic light group for a specific lane.
+ */
+struct TrafficLightStatus
+{
+  uint8_t color{autoware_perception_msgs::msg::TrafficLightElement::UNKNOWN};
+  bool is_arrow{false};  ///< True when the decisive element is an arrow (not a circle).
+};
+
+/**
+ * @brief Traffic light state of a lane segment at one timestep.
+ */
+struct TrafficLightState
+{
+  enum class Kind {
+    NO_TRAFFIC_LIGHT,  ///< The lane segment has no traffic light.
+    UNKNOWN,           ///< No valid observation at this timestep.
+    OBSERVED,
+  };
+  Kind kind{Kind::UNKNOWN};
+  TrafficLightStatus status;  ///< Valid only when kind == OBSERVED.
+};
+
+/**
+ * @brief Extract the traffic light state history per lane segment.
  *
  * Stateless: samples the messages on a fixed time grid ending at current_time
  * (zero-order hold on message stamps).
- * Output layout: (max_segments, num_timesteps, TRAFFIC_LIGHT_ONE_HOT_DIM).
- * Slot layout per timestep: [GREEN, AMBER, RED, UNKNOWN/no-data, WHITE or no
- * light]. Rows beyond segment_lights.size() stay all-zero (padding).
  *
  * @param traffic_signals_msgs Chronological window of TrafficLightGroupArray messages.
  * @param segment_lights (traffic light id, turn_direction) per lane segment.
- * @param max_segments Number of segment rows in the output tensor.
+ * @param max_segments Maximum number of segments to process.
  * @param current_time Time of the newest grid sample.
  * @param num_timesteps Number of grid samples.
  * @param time_step_s Grid interval in seconds.
  * @param timeout_s Observations older than this relative to a grid time are treated as no-data.
- * @return Tensor with shape [max_segments, num_timesteps, TRAFFIC_LIGHT_ONE_HOT_DIM].
+ * @return num_timesteps states (oldest first) per segment, for at most max_segments segments.
  */
-xt::xarray<float> create_traffic_light_past(
+std::vector<std::vector<TrafficLightState>> extract_traffic_light_past(
   const MessageView<autoware_perception_msgs::msg::TrafficLightGroupArray> & traffic_signals_msgs,
   const std::vector<std::pair<lanelet::Id, int64_t>> & segment_lights, const int64_t max_segments,
   const rclcpp::Time & current_time, const int64_t num_timesteps, const double time_step_s,
   const double timeout_s);
+
+/**
+ * @brief Build the one-hot traffic light state history tensor per lane segment.
+ *
+ * Output layout: (max_segments, num_timesteps, TRAFFIC_LIGHT_ONE_HOT_DIM).
+ * Slot layout per timestep: [GREEN, AMBER, RED, UNKNOWN/no-data, WHITE or no
+ * light, ARROW]. Rows beyond states.size() stay all-zero (padding).
+ *
+ * @param states Traffic light state history from extract_traffic_light_past().
+ * @param max_segments Number of segment rows in the output tensor.
+ * @param num_timesteps Number of grid samples.
+ * @return Tensor with shape [max_segments, num_timesteps, TRAFFIC_LIGHT_ONE_HOT_DIM].
+ */
+xt::xarray<float> create_traffic_light_past_tensor(
+  const std::vector<std::vector<TrafficLightState>> & states, const int64_t max_segments,
+  const int64_t num_timesteps);
 
 /**
  * @brief Infer the 8-second traffic-light sequence used during online inference.

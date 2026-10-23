@@ -144,6 +144,22 @@ using autoware_planning_msgs::msg::LaneletRoute;
 using autoware_planning_msgs::msg::LaneletSegment;
 
 /**
+ * @brief Lane segments selected for the model input (lanes or route lanes).
+ *
+ * Row i of every member describes the same lane segment.
+ */
+struct LaneData
+{
+  /// [max_segments, POINTS_PER_SEGMENT, LANE_3D_POINT_DIM]: ego-frame (x, y, z) of the center, left
+  /// bound and right bound. Rows beyond line_types.size() are zero (padding).
+  xt::xarray<float> points;
+  std::vector<std::pair<LineType, LineType>> line_types;  ///< (left, right) per segment
+  std::vector<std::optional<float>> speed_limits_mps;     ///< Per segment
+  /// [segment][timestep] traffic light state history, see extract_traffic_light_past().
+  std::vector<std::vector<TrafficLightState>> traffic_light_past;
+};
+
+/**
  * @brief Context class that encapsulates static lane segment processing data and operations.
  *
  * This class combines the commonly used static parameters (matrix, mappings, and lanelet map)
@@ -190,15 +206,14 @@ public:
     const int64_t max_segments) const;
 
   /**
-   * @brief Create tensor data from selected segment indices.
+   * @brief Create lane data from selected segment indices.
    *
    * @param transform_matrix Transformation matrix to apply to the points.
    * @param segment_indices Vector of segment indices to process.
-   * @param max_segments Maximum number of segments for output tensor.
-   * @return Lane geometry, lane type, and speed limit tensors.
+   * @param max_segments Maximum number of segments.
+   * @return Lane data without traffic_light_past.
    */
-  std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>>
-  create_tensor_data_from_indices(
+  LaneData create_lane_data(
     const Eigen::Matrix4d & transform_matrix, const std::vector<int64_t> & segment_indices,
     const int64_t max_segments) const;
 
@@ -239,7 +254,8 @@ public:
     return lanelet_id_to_array_index_;
   }
 
-  // Create intersection-area and map-polyline tensor data
+  // Create intersection-area and map-polyline tensor data as ego-frame (x, y, z) points,
+  // shape [num_elements, num_points, POLYLINE_3D_POINT_DIM]
   xt::xarray<float> create_intersection_area_tensor(
     const Eigen::Matrix4d & transform_matrix, double center_x, double center_y) const;
   xt::xarray<float> create_stop_line_tensor(
@@ -253,13 +269,33 @@ private:
 };
 
 /**
- * @brief Effective state of a traffic light group for a specific lane.
+ * @brief Convert LaneData::points to the model input layout.
+ *
+ * @param lanes_3d [num_segments, num_points, LANE_3D_POINT_DIM]
+ * @return [num_segments, num_points, SEGMENT_POINT_DIM]: center (x, y) and bounds relative to it.
  */
-struct TrafficLightStatus
-{
-  uint8_t color{autoware_perception_msgs::msg::TrafficLightElement::UNKNOWN};
-  bool is_arrow{false};  ///< True when the decisive element is an arrow (not a circle).
-};
+xt::xarray<float> create_lane_input_tensor(const xt::xarray<float> & lanes_3d);
+
+/**
+ * @brief Create the lane type tensor [max_segments, LANE_TYPE_DIM]: one-hot left and right line
+ * types. Rows beyond line_types.size() are zero.
+ */
+xt::xarray<float> create_lane_type_tensor(
+  const std::vector<std::pair<LineType, LineType>> & line_types, int64_t max_segments);
+
+/**
+ * @brief Create the speed limit tensor [max_segments, 1]; zero when no speed limit.
+ */
+xt::xarray<float> create_speed_limit_tensor(
+  const std::vector<std::optional<float>> & speed_limits_mps, int64_t max_segments);
+
+/**
+ * @brief Convert polyline points to the model input layout by dropping z.
+ *
+ * @param polylines_3d [num_elements, num_points, POLYLINE_3D_POINT_DIM]
+ * @return [num_elements, num_points, 2]
+ */
+xt::xarray<float> create_polyline_input_tensor(const xt::xarray<float> & polylines_3d);
 
 /**
  * @brief Identify the effective light state of a traffic light group for a

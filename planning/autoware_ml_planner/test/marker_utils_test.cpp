@@ -34,14 +34,14 @@ using visualization_msgs::msg::MarkerArray;
 
 TEST(MarkerUtilsTest, CreateLaneMarkerBasic)
 {
-  // Lane vector: 1 segment, 2 points, 8 dims (X, Y, LB_X, LB_Y, RB_X, RB_Y, ...), minimal
-  xt::xarray<float> lane_vector = {1.0f, 2.0f, 0.5f, 0.5f, -0.5f, -0.5f, 0.0f, 0.0f,
-                                   2.0f, 3.0f, 0.5f, 0.5f, -0.5f, -0.5f, 0.0f, 0.0f};
-  std::vector<int64_t> shape = {1, 1, 2, 8};  // batch, ?, points, dims
+  // Lane tensor: 1 segment, 2 points, (x, y, z) of center, left bound and right bound
+  xt::xarray<float> lane_tensor = {
+    {{1.0f, 2.0f, 0.0f, 1.5f, 2.5f, 0.0f, 0.5f, 1.5f, 0.0f},
+     {2.0f, 3.0f, 0.0f, 2.5f, 3.5f, 0.0f, 1.5f, 2.5f, 0.0f}}};
   rclcpp::Time stamp(123456, 789, RCL_ROS_TIME);
   rclcpp::Duration lifetime(1, 0);
   Eigen::Matrix4d identity = Eigen::Matrix4d::Identity();
-  auto marker_array = create_lane_marker(identity, lane_vector, shape, stamp, lifetime);
+  auto marker_array = create_lane_marker(identity, lane_tensor, stamp, lifetime);
 
   // Should create at least 1 marker for the centerline, and possibly for bounds/spheres
   EXPECT_GE(marker_array.markers.size(), 1u);
